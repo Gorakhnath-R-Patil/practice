@@ -1,0 +1,46 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: consumer-service
+  main:
+    allow-bean-definition-overriding: true
+  # Primary datasource → Postgres (for JPA entities)
+  datasource:
+    url: jdbc:postgresql://localhost:5432/healthcare_db
+    username: postgres
+    password: root
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update       # auto-create / update customers table
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  # Spring Batch needs its own metadata tables.
+  # We use a separate H2 in-memory datasource for that.
+  batch:
+    jdbc:
+      initialize-schema: always
+    datasource:
+      url: jdbc:h2:mem:batchmeta;DB_CLOSE_DELAY=-1
+      driver-class-name: org.h2.Driver
+      username: sa
+      password:
+    job:
+      enabled: false           # jobs triggered programmatically
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: healthcare-consumer-group
+      auto-offset-reset: earliest
+
+kafka:
+  topic:
+    customers: healthcare.customers

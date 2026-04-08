@@ -1,0 +1,40 @@
+C012,Arjun,Verma,arjun.verma@email.com,9876543220,1983-06-15,Male,POL-2024-012,PREMIUM,2024-01-01,2024-12-31,15000.00,Diabetes,Ruby Hall Clinic
+C013,Meera,Nambiar,meera.nambiar@email.com,9876543221,1991-09-22,Female,POL-2024-013,STANDARD,2024-02-01,2025-01-31,9500.00,None,KEM Hospital
+C014,Sanjay,Gupta,sanjay.gupta@email.com,9876543222,1977-03-10,Male,POL-2024-014,BASIC,2024-01-01,2024-12-31,5000.00,Hypertension,Sassoon General Hospital
+C015,Pooja,Reddy,pooja.reddy@email.com,9876543223,1994-11-28,Female,POL-2024-015,PREMIUM,2024-03-01,2025-02-28,15000.00,None,Jehangir Hospital
+C016,Rakesh,Tiwari,rakesh.tiwari@email.com,9876543224,1980-07-04,Male,POL-2024-016,STANDARD,2024-01-01,2024-12-31,9500.00,Asthma,Deenanath Mangeshkar Hospital
+C017,Sunita,Pillai,sunita.pillai@email.com,9876543225,1987-12-19,Female,POL-2024-017,BASIC,2024-04-01,2025-03-31,5000.00,Thyroid,Ruby Hall Clinic
+C018,Nikhil,Saxena,nikhil.saxena@email.com,9876543226,1992-05-30,Male,POL-2024-018,PREMIUM,2024-01-01,2024-12-31,15000.00,None,KEM Hospital
+C019,Divya,Menon,divya.menon@email.com,9876543227,1989-08-14,Female,POL-2024-019,STANDARD,2024-02-01,2025-01-31,9500.00,Arthritis,Jehangir Hospital
+C020,Ashok,Pandey,ashok.pandey@email.com,9876543228,1975-01-25,Male,POL-2024-020,BASIC,2024-01-01,2024-12-31,5000.00,Heart Disease,Sassoon General Hospital
+C021,Rekha,Sinha,rekha.sinha@email.com,9876543229,1996-04-07,Female,POL-2024-021,PREMIUM,2024-05-01,2025-04-30,15000.00,None,Deenanath Mangeshkar Hospital
+C022,Vikram,Malhotra,vikram.malhotra@email.com,9876543230,1984-10-18,Male,POL-2024-022,STANDARD,2024-01-01,2024-12-31,9500.00,Diabetes,Ruby Hall Clinic
+C023,Gayatri,Bhosale,gayatri.bhosale@email.com,9876543231,1990-02-11,Female,POL-2024-023,BASIC,2024-03-01,2025-02-28,5000.00,None,KEM Hospital
+C024,Pranav,Joshi,pranav.joshi@email.com,9876543232,1978-09-03,Male,POL-2024-024,PREMIUM,2024-01-01,2024-12-31,15000.00,Hypertension,Jehangir Hospital
+C025,Shruti,Kaur,shruti.kaur@email.com,9876543233,1993-06-26,Female,POL-2024-025,STANDARD,2024-02-01,2025-01-31,9500.00,None,Sassoon General Hospital
+C026,Aditya,Nair,aditya.nair@email.com,9876543234,1986-11-09,Male,POL-2024-026,BASIC,2024-01-01,2024-12-31,5000.00,Asthma,Deenanath Mangeshkar Hospital
+C027,Pallavi,Deshpande,pallavi.deshpande@email.com,9876543235,1991-03-21,Female,POL-2024-027,PREMIUM,2024-04-01,2025-03-31,15000.00,None,Ruby Hall Clinic
+C028,Rohit,Sharma,rohit.sharma@email.com,9876543236,1982-07-14,Male,POL-2024-028,STANDARD,2024-01-01,2024-12-31,9500.00,Arthritis,KEM Hospital
+C029,Neha,Kulkarni,neha.kulkarni@email.com,9876543237,1995-12-05,Female,POL-2024-029,BASIC,2024-02-01,2025-01-31,5000.00,Thyroid,Jehangir Hospital
+C030,Sunil,Patil,sunil.patil@email.com,9876543238,1979-04-30,Male,POL-2024-030,PREMIUM,2024-01-01,2024-12-31,15000.00,Heart Disease,Sassoon General Hospital
+C031,Anjali,Bhat,anjali.bhat@email.com,9876543239,1988-08-17,Female,POL-2024-031,STANDARD,2024-05-01,2025-04-30,9500.00,None,Deenanath Mangeshkar Hospital
+C032,Kiran,Rao,kiran.rao@email.com,9876543240,1976-01-08,Male,POL-2024-032,BASIC,2024-01-01,2024-12-31,5000.00,Diabetes,Ruby Hall Clinic
+C033,Swati,Jain,swati.jain@email.com,9876543241,1994-05-23,Female,POL-2024-033,PREMIUM,2024-03-01,2025-02-28,15000.00,None,KEM Hospital
+C034,Harish,Kumar,harish.kumar@email.com,9876543242,1981-10-12,Male,POL-2024-034,STANDARD,2024-01-01,2024-12-31,9500.00,Hypertension,Jehangir Hospital
+C035,Priyanka,Singh,priyanka.singh@email.com,9876543243,1992-07-29,Female,POL-2024-035,BASIC,2024-02-01,2025-01-31,5000.00,None,Sassoon General Hospital
+C036,Manish,Trivedi,manish.trivedi@email.com,9876543244,1985-03-16,Male,POL-2024-036,PREMIUM,2024-01-01,2024-12-31,15000.00,Asthma,Deenanath Mangeshkar Hospital
+C037,Kavya,Hegde,kavya.hegde@email.com,9876543245,1997-09-04,Female,POL-2024-037,STANDARD,2024-04-01,2025-03-31,9500.00,Arthritis,Ruby Hall Clinic
+C038,Deepak,Mishra,deepak.mishra@email.com,9876543246,1974-12-27,Male,POL-2024-038,BASIC,2024-01-01,2024-12-31,5000.00,None,KEM Hospital
+C039,Rupali,Pawar,rupali.pawar@email.com,9876543247,1990-06-18,Female,POL-2024-039,PREMIUM,2024-02-01,2025-01-31,15000.00,Heart Disease,Jehangir Hospital
+C040,Sameer,Desai,sameer.desai@email.com,9876543248,1983-11-01,Male,POL-2024-040,STANDARD,2024-01-01,2024-12-31,9500.00,Thyroid,Sassoon General Hospital
+C041,Nandini,Wagh,nandini.wagh@email.com,9876543249,1996-02-14,Female,POL-2024-041,BASIC,2024-05-01,2025-04-30,5000.00,None,Deenanath Mangeshkar Hospital
+C042,Tushar,Gaikwad,tushar.gaikwad@email.com,9876543250,1980-08-09,Male,POL-2024-042,PREMIUM,2024-01-01,2024-12-31,15000.00,Diabetes,Ruby Hall Clinic
+C043,Madhuri,Sawant,madhuri.sawant@email.com,9876543251,1989-04-22,Female,POL-2024-043,STANDARD,2024-03-01,2025-02-28,9500.00,None,KEM Hospital
+C044,Gaurav,Shinde,gaurav.shinde@email.com,9876543252,1977-10-15,Male,POL-2024-044,BASIC,2024-01-01,2024-12-31,5000.00,Hypertension,Jehangir Hospital
+C045,Snehal,More,snehal.more@email.com,9876543253,1993-01-31,Female,POL-2024-045,PREMIUM,2024-02-01,2025-01-31,15000.00,None,Sassoon General Hospital
+C046,Amol,Kadam,amol.kadam@email.com,9876543254,1986-06-06,Male,POL-2024-046,STANDARD,2024-01-01,2024-12-31,9500.00,Asthma,Deenanath Mangeshkar Hospital
+C047,Vidya,Naik,vidya.naik@email.com,9876543255,1991-11-19,Female,POL-2024-047,BASIC,2024-04-01,2025-03-31,5000.00,Arthritis,Ruby Hall Clinic
+C048,Sandesh,Jadhav,sandesh.jadhav@email.com,9876543256,1984-07-02,Male,POL-2024-048,PREMIUM,2024-01-01,2024-12-31,15000.00,None,KEM Hospital
+C049,Ashwini,Mane,ashwini.mane@email.com,9876543257,1998-03-25,Female,POL-2024-049,STANDARD,2024-02-01,2025-01-31,9500.00,Thyroid,Jehangir Hospital
+C050,Pramod,Lokhande,pramod.lokhande@email.com,9876543258,1975-09-13,Male,POL-2024-050,BASIC,2024-01-01,2024-12-31,5000.00,Heart Disease,Sassoon General Hospital
+C051,Rutuja,Chavan,rutuja.chavan@email.com,9876543259,1992-12-08,Female,POL-2024-051,PREMIUM,2024-05-01,2025-04-30,15000.00,None,Deenanath Mangeshkar Hospital

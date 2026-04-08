@@ -1,0 +1,83 @@
+# ===========================
+# Maven
+# ===========================
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.properties
+
+# ===========================
+# Spring Boot
+# ===========================
+*.log
+logs/
+spring-shell.log
+
+# ===========================
+# IDE - IntelliJ IDEA
+# ===========================
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.idea_modules/
+
+# ===========================
+# IDE - Eclipse / STS
+# ===========================
+.classpath
+.project
+.settings/
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+# ===========================
+# IDE - VS Code
+# ===========================
+.vscode/
+!.vscode/extensions.json
+
+# ===========================
+# OS
+# ===========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ===========================
+# Docker
+# ===========================
+.docker/
+
+# ===========================
+# Environment / Secrets
+# ===========================
+.env
+.env.*
+*.secret
+secrets/
+
+# ===========================
+# Misc
+# ===========================
+*.tmp
+*.bak
+*.swp
+*.orig
