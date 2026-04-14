@@ -32,6 +32,13 @@ spec:
       labels:
         app: kafka
     spec:
+      # enableServiceLinks: false stops Kubernetes from auto-injecting
+      # "<SERVICE_NAME>_PORT", "<SERVICE_NAME>_SERVICE_HOST" etc. env vars
+      # into this pod. By default K8s injects KAFKA_PORT, KAFKA_SERVICE_HOST
+      # etc. because the service is named "kafka" — the Confluent image
+      # misreads those as broker config and crashes. Disabling it cleanly
+      # removes the collision without renaming anything.
+      enableServiceLinks: false
       containers:
         - name: kafka
           image: confluentinc/cp-kafka:7.7.1
@@ -54,10 +61,13 @@ spec:
             - name: KAFKA_PROCESS_ROLES
               value: "broker,controller"
 
-            # The only Raft voter is node 1 at kafka:9093.
-            # "kafka" resolves via Kubernetes DNS to the Service below.
+            # The only Raft voter is node 1 at localhost:9093.
+            # Using localhost instead of the Service name avoids a circular
+            # dependency: the Service has no ready endpoints until Kafka is
+            # healthy, but Kafka needs the controller port to start.
+            # Since broker and controller run in the same pod, localhost works.
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-              value: "1@kafka:9093"
+              value: "1@localhost:9093"
 
             # ── Listeners ─────────────────────────────────────────────────
             # PLAINTEXT   → broker traffic from other pods inside the cluster
@@ -95,17 +105,21 @@ spec:
               value: "24"
 
           # ── Readiness Probe ───────────────────────────────────────────────
-          # Lists topics — if this succeeds, Kafka is ready to accept connections.
-          # kafka-init Job and application pods wait until this passes.
+          # TCP socket check — verifies Kafka is listening on the broker port.
+          # We avoid kafka-topics --list here because that command bootstraps
+          # via localhost:29092 but then follows KAFKA_ADVERTISED_LISTENERS
+          # (kafka:29092 = Service ClusterIP). The Service has no ready endpoints
+          # until this very probe passes → circular dependency. A raw TCP check
+          # breaks the circle: it just confirms the port is open.
           readinessProbe:
-            exec:
-              command: ["kafka-topics", "--bootstrap-server", "localhost:29092", "--list"]
+            tcpSocket:
+              port: 29092
             initialDelaySeconds: 30   # Kafka takes ~20-30s to start in KRaft mode
             periodSeconds: 10
             failureThreshold: 10
           livenessProbe:
-            exec:
-              command: ["kafka-topics", "--bootstrap-server", "localhost:29092", "--list"]
+            tcpSocket:
+              port: 29092
             initialDelaySeconds: 60
             periodSeconds: 15
           resources:
