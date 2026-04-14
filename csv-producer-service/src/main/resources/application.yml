@@ -5,26 +5,22 @@ spring:
   application:
     name: csv-producer-service
 
-  # H2 in-memory DB for Spring Batch metadata (JobRepository)
+  # PostgreSQL datasource for Spring Batch JobRepository metadata
+  # Env vars override when running inside Docker (set in docker-compose)
   datasource:
-    url: jdbc:h2:mem:batchdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/healthcare_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:root}
+    driver-class-name: org.postgresql.Driver
 
   batch:
     jdbc:
-      initialize-schema: always   # auto-create batch metadata tables
+      initialize-schema: always   # auto-create Spring Batch metadata tables in Postgres
     job:
       enabled: false              # do NOT auto-run on startup; trigger via REST
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 
   servlet:
     multipart:
@@ -34,3 +30,21 @@ spring:
 kafka:
   topic:
     customers: healthcare.customers
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,env,loggers,httptrace
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always   # shows DB, Kafka, disk-space sub-indicators
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: csv-producer-service
+    description: Reads CSV files via Spring Batch and publishes records to Kafka

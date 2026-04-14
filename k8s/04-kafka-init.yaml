@@ -1,0 +1,95 @@
+# ── Kafka Topic Init — Job ────────────────────────────────────────────────────
+#
+# A Job runs a pod to completion exactly once (unlike a Deployment which keeps
+# the pod running). Perfect for one-shot tasks like creating Kafka topics.
+#
+# This Job creates:
+#   healthcare.customers          ← main ingest topic
+#   healthcare.customers-retry-0  ← 1st retry  (2s delay, managed by @RetryableTopic)
+#   healthcare.customers-retry-1  ← 2nd retry  (4s delay)
+#   healthcare.customers-retry-2  ← 3rd retry  (8s delay)
+#   healthcare.customers.DLT      ← Dead Letter Topic (poison pill messages land here)
+#
+# The script loops until Kafka is reachable before creating topics,
+# so it's safe to apply even before Kafka's readiness probe passes.
+#
+# Apply:  kubectl apply -f k8s/04-kafka-init.yaml
+# Verify: kubectl get jobs -n healthcare
+#         kubectl logs -n healthcare job/kafka-init
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-init
+  namespace: healthcare
+spec:
+  # backoffLimit — how many times Kubernetes retries the Job if it fails.
+  # Kafka might not be ready the first time, so allow a few retries.
+  backoffLimit: 5
+
+  template:
+    spec:
+      # restartPolicy for Job pods must be OnFailure or Never (not Always).
+      # OnFailure → restart the container if it exits with non-zero code.
+      restartPolicy: OnFailure
+
+      containers:
+        - name: kafka-init
+          image: confluentinc/cp-kafka:7.7.1
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              echo "=== Waiting for Kafka to be ready ==="
+              # Loop until the broker responds — handles the case where
+              # this Job starts before Kafka's readiness probe passes.
+              until kafka-topics --bootstrap-server kafka:29092 --list > /dev/null 2>&1; do
+                echo "Kafka not ready yet, retrying in 5s..."
+                sleep 5
+              done
+
+              echo "=== Kafka is ready — creating topics ==="
+
+              kafka-topics --create --if-not-exists \
+                --bootstrap-server kafka:29092 \
+                --topic healthcare.customers \
+                --partitions 3 \
+                --replication-factor 1
+
+              kafka-topics --create --if-not-exists \
+                --bootstrap-server kafka:29092 \
+                --topic healthcare.customers-retry-0 \
+                --partitions 3 \
+                --replication-factor 1 \
+                --config retention.ms=3600000
+
+              kafka-topics --create --if-not-exists \
+                --bootstrap-server kafka:29092 \
+                --topic healthcare.customers-retry-1 \
+                --partitions 3 \
+                --replication-factor 1 \
+                --config retention.ms=3600000
+
+              kafka-topics --create --if-not-exists \
+                --bootstrap-server kafka:29092 \
+                --topic healthcare.customers-retry-2 \
+                --partitions 3 \
+                --replication-factor 1 \
+                --config retention.ms=3600000
+
+              kafka-topics --create --if-not-exists \
+                --bootstrap-server kafka:29092 \
+                --topic healthcare.customers.DLT \
+                --partitions 3 \
+                --replication-factor 1 \
+                --config retention.ms=604800000
+
+              echo "=== All topics created ==="
+              kafka-topics --bootstrap-server kafka:29092 --list
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"

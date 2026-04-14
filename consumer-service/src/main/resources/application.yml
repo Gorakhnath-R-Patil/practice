@@ -4,43 +4,55 @@ server:
 spring:
   application:
     name: consumer-service
-  main:
-    allow-bean-definition-overriding: true
-  # Primary datasource → Postgres (for JPA entities)
+
+  # Single PostgreSQL datasource — used by both JPA (entities) and Spring Batch (metadata)
+  # Env vars override when running inside Docker (set in docker-compose)
   datasource:
-    url: jdbc:postgresql://localhost:5432/healthcare_db
-    username: postgres
-    password: root
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/healthcare_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:root}
     driver-class-name: org.postgresql.Driver
 
   jpa:
     hibernate:
-      ddl-auto: update       # auto-create / update customers table
+      ddl-auto: update        # auto-create / update customers table
     show-sql: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
 
-  # Spring Batch needs its own metadata tables.
-  # We use a separate H2 in-memory datasource for that.
   batch:
     jdbc:
-      initialize-schema: always
-    datasource:
-      url: jdbc:h2:mem:batchmeta;DB_CLOSE_DELAY=-1
-      driver-class-name: org.h2.Driver
-      username: sa
-      password:
+      initialize-schema: always   # auto-create Spring Batch metadata tables in Postgres
     job:
-      enabled: false           # jobs triggered programmatically
+      enabled: false              # jobs triggered programmatically
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
       group-id: healthcare-consumer-group
       auto-offset-reset: earliest
+      enable-auto-commit: false   # required for @RetryableTopic to control offset commits
 
 kafka:
   topic:
     customers: healthcare.customers
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,env,loggers,httptrace
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always   # shows DB, Kafka, disk-space sub-indicators
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: consumer-service
+    description: Consumes Kafka messages via Spring Batch and persists customers to Postgres

@@ -1,38 +1,167 @@
 version: '3.8'
 
 services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.0
-    container_name: zookeeper
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - "2181:2181"
 
+  # ─── Infrastructure ──────────────────────────────────────────────────────────
+
+  # KRaft-mode Kafka — no ZooKeeper required (removed in Kafka 4.0 / CP 7.7+).
+  # The broker and controller run in the same JVM process (combined mode).
   kafka:
-    image: confluentinc/cp-kafka:7.6.0
+    image: confluentinc/cp-kafka:7.7.1
     container_name: kafka
-    depends_on:
-      - zookeeper
     ports:
-      - "9092:9092"
+      - "9092:9092"        # host access (local tools / Kafka UI on host)
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # ── KRaft identity ───────────────────────────────────────────────
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qg"          # 22-char base64 UUID — fixed for reproducibility
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"        # combined mode: one process handles both roles
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"  # this node is the only voter
+
+      # ── Listeners ───────────────────────────────────────────────────
+      #   PLAINTEXT      → internal Docker network  (kafka:29092)
+      #   PLAINTEXT_HOST → Docker host              (localhost:9092)
+      #   CONTROLLER     → KRaft controller port    (kafka:9093)
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+
+      # ── Broker settings ──────────────────────────────────────────────
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_LOG_RETENTION_HOURS: 24
+    volumes:
+      - kafka-data:/var/lib/kafka/data   # persist KRaft metadata so cluster ID survives restarts
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:29092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - healthcare-net
+
+  # Pre-create all required topics (main + retry chain + DLT)
+  kafka-init:
+    image: confluentinc/cp-kafka:7.7.1
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo '=== Creating Kafka topics ==='
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 \
+          --topic healthcare.customers --partitions 3 --replication-factor 1
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 \
+          --topic healthcare.customers-retry-0 --partitions 3 --replication-factor 1 \
+          --config retention.ms=3600000
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 \
+          --topic healthcare.customers-retry-1 --partitions 3 --replication-factor 1 \
+          --config retention.ms=3600000
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 \
+          --topic healthcare.customers-retry-2 --partitions 3 --replication-factor 1 \
+          --config retention.ms=3600000
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 \
+          --topic healthcare.customers.DLT --partitions 3 --replication-factor 1 \
+          --config retention.ms=604800000
+        echo '=== Topics ready ==='
+        kafka-topics --bootstrap-server kafka:29092 --list
+    networks:
+      - healthcare-net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: healthcare_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d healthcare_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - healthcare-net
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     ports:
       - "8080:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      # No ZOOKEEPER entry — KRaft doesn't use ZooKeeper
+    networks:
+      - healthcare-net
+
+  # ─── Application Services ────────────────────────────────────────────────────
+
+  csv-producer-service:
+    build:
+      context: .
+      dockerfile: csv-producer-service/Dockerfile
+    container_name: csv-producer-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/healthcare_db
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: root
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    volumes:
+      - ./sample-customers.csv:/data/sample-customers.csv:ro
+    networks:
+      - healthcare-net
+
+  consumer-service:
+    build:
+      context: .
+      dockerfile: consumer-service/Dockerfile
+    container_name: consumer-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/healthcare_db
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: root
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    networks:
+      - healthcare-net
+
+# ─── Volumes & Networks ────────────────────────────────────────────────────────
+
+volumes:
+  postgres-data:
+  kafka-data:
+
+networks:
+  healthcare-net:
+    driver: bridge

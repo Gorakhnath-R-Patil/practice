@@ -1,0 +1,104 @@
+# ── Consumer Service — Deployment + Service ───────────────────────────────────
+#
+# This is the Spring Boot service that:
+#   1. Listens on the Kafka topic healthcare.customers
+#   2. Buffers messages in an in-memory queue
+#   3. Every 10 seconds runs a Spring Batch job to drain the queue into Postgres
+#
+# Retry / DLT flow (all Kafka-level):
+#   Fail → retry-0 (2s) → retry-1 (4s) → retry-2 (8s) → DLT
+#
+# Image build (run BEFORE applying this file):
+#   eval $(minikube docker-env)
+#   docker build -t consumer-service:latest \
+#     -f consumer-service/Dockerfile .
+#
+# Access: minikube service consumer-service -n healthcare
+#
+# Apply:  kubectl apply -f k8s/07-consumer.yaml
+# Verify: kubectl get pods -n healthcare -l app=consumer-service
+#         kubectl logs -n healthcare deployment/consumer-service -f
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── 1. Deployment ─────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consumer-service
+  namespace: healthcare
+  labels:
+    app: consumer-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: consumer-service
+  template:
+    metadata:
+      labels:
+        app: consumer-service
+    spec:
+      containers:
+        - name: consumer-service
+          image: consumer-service:latest
+          imagePullPolicy: Never   # Use locally built image from minikube docker-env
+          ports:
+            - containerPort: 8082
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://postgres:5432/healthcare_db"
+            - name: SPRING_DATASOURCE_USERNAME
+              value: "postgres"
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: "root"
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:29092"
+
+          # ── Readiness Probe ───────────────────────────────────────────────
+          # Spring Boot checks DB + Kafka connectivity inside /actuator/health.
+          # The pod won't receive traffic (or be considered "ready" for
+          # Kafka consumption) until both are healthy.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 40
+            periodSeconds: 10
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 60
+            periodSeconds: 15
+
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+---
+
+# ── 2. Service ────────────────────────────────────────────────────────────────
+#
+# NodePort for accessing Actuator endpoints from the host.
+# Useful for: curl http://<minikube-ip>:30082/actuator/health
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: consumer-service
+  namespace: healthcare
+spec:
+  type: NodePort
+  selector:
+    app: consumer-service
+  ports:
+    - port: 8082
+      targetPort: 8082
+      nodePort: 30082

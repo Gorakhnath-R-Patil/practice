@@ -1,0 +1,17 @@
+# ── Namespace ────────────────────────────────────────────────────────────────
+#
+# A Namespace is a logical boundary inside a Kubernetes cluster.
+# Everything in this project (pods, services, jobs) lives under "healthcare"
+# so it doesn't mix with other workloads in the default namespace.
+#
+# Apply:  kubectl apply -f k8s/01-namespace.yaml
+# Verify: kubectl get namespaces
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: healthcare
+  labels:
+    # Labels are arbitrary key-value pairs — useful for filtering with kubectl
+    project: healthcare-insurance-demo

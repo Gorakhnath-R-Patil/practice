@@ -1,0 +1,133 @@
+# ── PostgreSQL — PersistentVolumeClaim + Deployment + Service ────────────────
+#
+# Three Kubernetes resources are defined in this single file, separated by ---.
+# You can split them into separate files — keeping them together just makes
+# it easier to understand that they belong to the same workload.
+#
+# Apply:  kubectl apply -f k8s/02-postgres.yaml
+# Verify: kubectl get all -n healthcare
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── 1. PersistentVolumeClaim (PVC) ───────────────────────────────────────────
+#
+# Kubernetes abstracts storage through PersistentVolumes (PV) and PVCs.
+# A PVC is a request for storage — "give me 1Gi of disk".
+# Minikube automatically provisions a PV backed by the host filesystem
+# to satisfy this claim (using the built-in "standard" StorageClass).
+#
+# Without a PVC, Postgres data would live inside the container and be lost
+# every time the pod restarts.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: healthcare
+spec:
+  accessModes:
+    - ReadWriteOnce   # Only one node can mount this volume at a time (fine for a single pod)
+  resources:
+    requests:
+      storage: 512Mi  # How much disk space to request from the cluster
+
+---
+
+# ── 2. Deployment ─────────────────────────────────────────────────────────────
+#
+# A Deployment tells Kubernetes: "keep N copies of this pod running".
+# If the pod crashes, Kubernetes restarts it automatically.
+# replicas: 1 means one Postgres pod — enough for local development.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: healthcare
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  selector:
+    # Kubernetes uses this selector to know WHICH pods this Deployment manages.
+    # Must match the labels defined in template.metadata.labels below.
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres   # ← must match selector.matchLabels above
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432   # Port the container listens on (documentation only)
+          env:
+            # These env vars are read by the official Postgres image on first startup
+            # to create the database, user, and password.
+            - name: POSTGRES_DB
+              value: healthcare_db
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: root
+          # ── Readiness Probe ───────────────────────────────────────────────
+          # Kubernetes won't send traffic to a pod until readinessProbe passes.
+          # pg_isready checks if Postgres is accepting connections.
+          # Other pods that depend on Postgres (apps) should only start after
+          # this probe succeeds.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "healthcare_db"]
+            initialDelaySeconds: 10   # Wait 10s before first check
+            periodSeconds: 5          # Check every 5s
+            failureThreshold: 6       # Mark unhealthy after 6 consecutive failures
+          # ── Liveness Probe ────────────────────────────────────────────────
+          # If the liveness probe fails, Kubernetes restarts the container.
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "healthcare_db"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          # ── Volume Mount ──────────────────────────────────────────────────
+          # Mount the PVC (claimed above) into the path where Postgres stores data.
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"     # 100 millicores = 0.1 CPU
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        # Link the volume name used in volumeMounts to the actual PVC
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc   # Must match the PVC name defined above
+
+---
+
+# ── 3. Service ────────────────────────────────────────────────────────────────
+#
+# A Service gives a stable DNS name and IP to a set of pods.
+# Pods get random IPs that change on restart — a Service stays constant.
+#
+# type: ClusterIP  → only reachable from INSIDE the cluster.
+# Other pods connect to Postgres using: postgres.healthcare.svc.cluster.local:5432
+# or simply "postgres:5432" when they are in the same namespace.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: healthcare
+spec:
+  type: ClusterIP   # Internal only — no external access needed for the database
+  selector:
+    app: postgres   # Routes traffic to pods with this label
+  ports:
+    - port: 5432        # Port the Service exposes
+      targetPort: 5432  # Port on the pod to forward to

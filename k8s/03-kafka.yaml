@@ -1,0 +1,146 @@
+# ── Kafka (KRaft mode) — Deployment + Service ────────────────────────────────
+#
+# KRaft = Kafka Raft — Kafka's built-in metadata consensus.
+# No ZooKeeper needed. One pod acts as both broker AND controller.
+#
+# Key difference from Docker Compose:
+#   KAFKA_ADVERTISED_LISTENERS uses the Kubernetes Service name "kafka"
+#   instead of "localhost". Kubernetes DNS resolves "kafka" → ClusterIP
+#   of the Service defined at the bottom of this file.
+#
+# Apply:  kubectl apply -f k8s/03-kafka.yaml
+# Verify: kubectl get pods -n healthcare
+#         kubectl logs -n healthcare deployment/kafka
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── 1. Deployment ─────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: healthcare
+  labels:
+    app: kafka
+spec:
+  replicas: 1   # Single broker — fine for learning; production uses 3+
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: confluentinc/cp-kafka:7.7.1
+          ports:
+            - containerPort: 29092   # Internal broker port (used by other pods)
+            - containerPort: 9093    # KRaft controller port (Raft consensus)
+          env:
+            # ── KRaft Identity ────────────────────────────────────────────
+            # Fixed cluster ID — must stay the same across pod restarts.
+            # Change this only if you wipe Kafka storage.
+            - name: CLUSTER_ID
+              value: "MkU3OEVBNTcwNTJENDM2Qg"
+
+            # This node's unique ID within the cluster
+            - name: KAFKA_NODE_ID
+              value: "1"
+
+            # This node is both a broker (handles producers/consumers)
+            # and a controller (handles metadata / leader election via Raft)
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+
+            # The only Raft voter is node 1 at kafka:9093.
+            # "kafka" resolves via Kubernetes DNS to the Service below.
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@kafka:9093"
+
+            # ── Listeners ─────────────────────────────────────────────────
+            # PLAINTEXT   → broker traffic from other pods inside the cluster
+            # CONTROLLER  → internal Raft controller traffic (never client-facing)
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+
+            # Bind to all interfaces on both ports
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093"
+
+            # Advertise the Kubernetes Service name so other pods can connect.
+            # "kafka:29092" resolves correctly because we create a Service
+            # named "kafka" in the same namespace.
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka:29092"
+
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+
+            # ── Broker Settings ───────────────────────────────────────────
+            # replication factor = 1 since we only have 1 broker
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "true"
+            - name: KAFKA_LOG_RETENTION_HOURS
+              value: "24"
+
+          # ── Readiness Probe ───────────────────────────────────────────────
+          # Lists topics — if this succeeds, Kafka is ready to accept connections.
+          # kafka-init Job and application pods wait until this passes.
+          readinessProbe:
+            exec:
+              command: ["kafka-topics", "--bootstrap-server", "localhost:29092", "--list"]
+            initialDelaySeconds: 30   # Kafka takes ~20-30s to start in KRaft mode
+            periodSeconds: 10
+            failureThreshold: 10
+          livenessProbe:
+            exec:
+              command: ["kafka-topics", "--bootstrap-server", "localhost:29092", "--list"]
+            initialDelaySeconds: 60
+            periodSeconds: 15
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+
+---
+
+# ── 2. Service ────────────────────────────────────────────────────────────────
+#
+# ClusterIP Service — internal only.
+# Other pods reach Kafka at "kafka:29092" within the healthcare namespace.
+#
+# We expose both the broker port (29092) and the controller port (9093).
+# 9093 is only used internally by the Kafka process itself for Raft consensus,
+# but exposing it via the Service allows the pod to resolve "kafka:9093"
+# which matches KAFKA_CONTROLLER_QUORUM_VOTERS above.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: healthcare
+spec:
+  type: ClusterIP
+  selector:
+    app: kafka
+  ports:
+    - name: broker
+      port: 29092
+      targetPort: 29092
+    - name: controller
+      port: 9093
+      targetPort: 9093

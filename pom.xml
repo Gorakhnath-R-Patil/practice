@@ -22,7 +22,13 @@
     </parent>
 
     <properties>
-        <java.version>17</java.version>
-        <kafka.version>3.6.0</kafka.version>
+        <!--
+          Compile target: Java 21 LTS.
+          Lombok's annotation processor relies on private javac APIs (TypeTag, etc.)
+          that change with every major JDK release; no stable Lombok release fully
+          supports Java 25 yet. Java 21 bytecode runs without any change on Java 25 JRE.
+          Runtime image in the Dockerfiles is eclipse-temurin:25-jre-alpine.
+        -->
+        <java.version>21</java.version>
     </properties>
 </project>
