@@ -346,8 +346,6 @@ Run the full stack on a local Kubernetes cluster using Minikube.
 
 ### Prerequisites
 
-<!-- tabs for OS -->
-
 **Windows** (PowerShell as admin)
 ```powershell
 winget install Kubernetes.minikube
@@ -385,7 +383,6 @@ k8s/
 ### Step 1 — Start Minikube
 
 ```bash
-# Same command on both Windows and macOS
 # Start with enough memory for Kafka + Postgres + 2 Spring Boot apps
 minikube start --memory=4096 --cpus=2
 ```
@@ -397,12 +394,15 @@ minikube start --memory=4096 --cpus=2
 Minikube runs its own Docker daemon. Point your local Docker CLI at it,
 then build — images land directly inside Minikube, no push to a registry needed.
 
+> **Important:** You must run the `docker-env` command in **every new terminal session**
+> before building. If you skip it, the images won't be visible to Minikube.
+
 **macOS / Linux**
 ```bash
-# Point Docker CLI at Minikube's daemon (run in every new terminal session)
+# Point Docker CLI at Minikube's daemon
 eval $(minikube docker-env)
 
-# Build both app images
+# Build both app images (run from the project root)
 docker build -t csv-producer-service:latest -f csv-producer-service/Dockerfile .
 docker build -t consumer-service:latest     -f consumer-service/Dockerfile .
 
@@ -415,13 +415,15 @@ docker images | grep -E "csv-producer|consumer-service"
 # Point Docker CLI at Minikube's daemon
 & minikube -p minikube docker-env --shell powershell | Invoke-Expression
 
-# Build both app images
+# Build both app images (run from the project root)
 docker build -t csv-producer-service:latest -f csv-producer-service/Dockerfile .
 docker build -t consumer-service:latest     -f consumer-service/Dockerfile .
 
 # Confirm images are visible inside Minikube
 docker images | Select-String "csv-producer|consumer-service"
 ```
+
+> First build takes ~3–5 minutes — Maven downloads all dependencies inside the builder container.
 
 ---
 
@@ -431,11 +433,11 @@ docker images | Select-String "csv-producer|consumer-service"
 # Apply all 7 manifests in one shot (numbered order is respected)
 kubectl apply -f k8s/
 
-# Watch pods come up (Ctrl+C to exit)
+# Watch pods come up — wait until all are 1/1 Running (Ctrl+C to exit)
 kubectl get pods -n healthcare -w
 ```
 
-Expected final state:
+Expected final state (takes ~2–3 minutes):
 
 ```
 NAME                                   READY   STATUS      RESTARTS
@@ -447,46 +449,75 @@ csv-producer-service-xxxx              1/1     Running     0
 consumer-service-xxxx                  1/1     Running     0
 ```
 
+> The app pods (producer/consumer) may restart 2–3 times while waiting for Kafka and
+> Postgres to be ready. This is normal — Kubernetes will keep retrying automatically.
+
 ---
 
 ### Step 4 — Get service URLs
 
+**macOS / Linux**
 ```bash
-# Minikube prints the URL for each NodePort service
 minikube service csv-producer-service -n healthcare --url
 minikube service consumer-service     -n healthcare --url
 minikube service kafka-ui             -n healthcare --url
 ```
 
-Or open all at once in the browser:
+**Windows** (PowerShell)
+```powershell
+minikube service csv-producer-service -n healthcare --url
+minikube service consumer-service     -n healthcare --url
+minikube service kafka-ui             -n healthcare --url
+```
 
+Or open directly in the browser:
 ```bash
 minikube service csv-producer-service -n healthcare
 minikube service kafka-ui             -n healthcare
 ```
 
+Alternatively, use `kubectl port-forward` (works on all OS without needing the Minikube IP):
+
+```bash
+# Terminal 1 — producer
+kubectl port-forward -n healthcare svc/csv-producer-service 8081:8081
+
+# Terminal 2 — consumer
+kubectl port-forward -n healthcare svc/consumer-service 8082:8082
+
+# Terminal 3 — Kafka UI
+kubectl port-forward -n healthcare svc/kafka-ui 8080:8080
+```
+
+Then access at `http://localhost:8081`, `http://localhost:8082`, `http://localhost:8080`.
+
 ---
 
 ### Step 5 — Test with curl
 
-Replace `<PRODUCER_URL>` with the URL from Step 4.
+Replace `<PRODUCER_URL>` with the URL from Step 4 (or use `http://localhost:8081` if port-forwarding).
 
 ```bash
-# Health check
+# Health checks — both should return {"status":"UP"}
 curl <PRODUCER_URL>/actuator/health
 curl <CONSUMER_URL>/actuator/health
 
-# Upload CSV → triggers full pipeline
+# Upload CSV → triggers the full pipeline
 curl -X POST <PRODUCER_URL>/api/batch/upload \
   -F "file=@sample-customers.csv"
+
+# Expected response:
+# Job launched. Status: COMPLETED | JobId: 1
 ```
 
-Wait ~10 seconds for the consumer batch job to drain, then verify in Postgres:
+Wait ~10 seconds for the consumer batch job to drain, then verify data in Postgres:
 
 ```bash
+# Row count — should be 39
 kubectl exec -n healthcare deployment/postgres -- \
   psql -U postgres -d healthcare_db -c "SELECT COUNT(*) FROM customers;"
 
+# Preview first 5 rows
 kubectl exec -n healthcare deployment/postgres -- \
   psql -U postgres -d healthcare_db \
   -c "SELECT customer_id, first_name, plan_type, premium_amount FROM customers LIMIT 5;"
@@ -497,15 +528,16 @@ kubectl exec -n healthcare deployment/postgres -- \
 ### Useful kubectl commands
 
 ```bash
-# List everything in the namespace
+# List all pods, services, deployments in the namespace
 kubectl get all -n healthcare
 
-# Pod logs (live)
+# Live pod logs
 kubectl logs -n healthcare deployment/consumer-service -f
 kubectl logs -n healthcare deployment/csv-producer-service -f
 kubectl logs -n healthcare deployment/kafka -f
 
-# Describe a pod (events, env vars, probes — useful for debugging)
+# Describe a pod — shows events, env vars, probe status (great for debugging)
+kubectl describe pod -n healthcare -l app=kafka
 kubectl describe pod -n healthcare -l app=consumer-service
 
 # Shell into a running pod
@@ -516,14 +548,25 @@ kubectl exec -it -n healthcare deployment/kafka   -- bash
 kubectl get jobs -n healthcare
 kubectl logs   -n healthcare job/kafka-init
 
-# List Kafka topics from inside the cluster
+# List Kafka topics (exec inside the Kafka pod)
 kubectl exec -n healthcare deployment/kafka -- \
   kafka-topics --bootstrap-server localhost:29092 --list
+
+# Describe the main topic (partitions, replication factor)
+kubectl exec -n healthcare deployment/kafka -- \
+  kafka-topics --bootstrap-server localhost:29092 \
+  --describe --topic healthcare.customers
 
 # Consumer group lag
 kubectl exec -n healthcare deployment/kafka -- \
   kafka-consumer-groups --bootstrap-server localhost:29092 \
   --describe --group healthcare-consumer-group
+
+# Restart a deployment (e.g. after a config change)
+kubectl rollout restart deployment/consumer-service -n healthcare
+
+# Check rollout status
+kubectl rollout status deployment/kafka -n healthcare
 ```
 
 ---
@@ -531,18 +574,42 @@ kubectl exec -n healthcare deployment/kafka -- \
 ### Tear down
 
 ```bash
-# Delete all resources in the namespace
+# Delete all resources in the namespace (keeps Minikube running)
 kubectl delete -f k8s/
 
-# Or delete the entire namespace (removes everything inside it)
+# Or delete the entire namespace at once
 kubectl delete namespace healthcare
 
-# Stop Minikube (keeps the cluster state)
+# Stop Minikube (preserves cluster state — fast to resume)
 minikube stop
 
-# Delete the cluster entirely (fresh start next time)
+# Delete the cluster entirely (clean slate for next run)
 minikube delete
 ```
+
+---
+
+### Design notes — Kafka on Kubernetes
+
+Three non-obvious things fixed in `k8s/03-kafka.yaml` that are worth understanding:
+
+**1. `enableServiceLinks: false`**
+Kubernetes auto-injects env vars like `KAFKA_PORT=tcp://10.x.x.x:29092` for every
+Service in the namespace. Because our Service is named `kafka`, K8s injects `KAFKA_PORT`
+into the Kafka pod. The Confluent image treats every `KAFKA_*` env var as a broker config
+and crashes. Disabling service-link injection removes the collision entirely.
+
+**2. `KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093` (not `kafka:9093`)**
+Using the Service DNS name (`kafka:9093`) for the KRaft quorum creates a circular
+dependency: the Service has no ready endpoints until the pod is healthy, but the pod
+needs to reach the controller port to start. Since the broker and controller run in the
+same pod, `localhost` always resolves correctly.
+
+**3. `tcpSocket` readiness/liveness probes (not `kafka-topics --list`)**
+The `kafka-topics` CLI bootstraps via `localhost:29092` but then follows
+`KAFKA_ADVERTISED_LISTENERS` (`kafka:29092` = Service ClusterIP) for the actual request.
+The Service has no endpoints until the probe passes — another circular dependency.
+A raw TCP socket check just verifies the port is open and avoids the redirect entirely.
 
 ---
 
@@ -551,10 +618,11 @@ minikube delete
 | Symptom | Command | Common cause |
 |---|---|---|
 | Pod stuck in `Pending` | `kubectl describe pod -n healthcare <name>` | Not enough memory — increase `minikube start --memory` |
-| Pod in `ImagePullBackOff` | `kubectl describe pod -n healthcare <name>` | `imagePullPolicy: Never` missing or image not built inside Minikube daemon |
-| App crashes on start | `kubectl logs -n healthcare deployment/<name>` | Postgres or Kafka not ready yet — pod will auto-restart |
-| Job stuck | `kubectl logs -n healthcare job/kafka-init` | Kafka readiness probe not yet passed |
-| `eval $(minikube docker-env)` lost (macOS/Linux) | Re-run in current terminal session | Shell env reset |
-| `Invoke-Expression` error (Windows) | Run `& minikube -p minikube docker-env --shell powershell \| Invoke-Expression` in PowerShell | Must use PowerShell, not CMD |
-| `minikube` not found (Windows) | Add `C:\Program Files\Kubernetes\Minikube` to PATH | winget installs but doesn't always update PATH in current session |
-| `brew: command not found` (macOS) | Install Homebrew: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` | Homebrew not installed |
+| Pod in `ImagePullBackOff` | `kubectl describe pod -n healthcare <name>` | Image not built inside Minikube daemon — re-run `docker-env` + `docker build` |
+| App pods restart 2–3 times on start | `kubectl logs -n healthcare deployment/<name>` | Normal — Postgres/Kafka not ready yet, K8s retries automatically |
+| `kafka-init` Job stuck | `kubectl logs -n healthcare job/kafka-init` | Kafka readiness probe not yet passed — wait a bit longer |
+| `eval $(minikube docker-env)` lost | Re-run in the current terminal | Shell env is per-session — must repeat after opening a new terminal |
+| `Invoke-Expression` error (Windows) | Use PowerShell, not CMD | `minikube docker-env` output only works in PowerShell |
+| `minikube` not found (Windows) | Add `C:\Program Files\Kubernetes\Minikube` to PATH | `winget` installs but may not update PATH in the current session |
+| `brew: command not found` (macOS) | Install Homebrew first | See https://brew.sh |
+| Port-forward disconnects | Re-run the `kubectl port-forward` command | port-forward connections drop if the pod restarts |
