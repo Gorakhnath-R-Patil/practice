@@ -1,6 +1,7 @@
 # Healthcare Insurance Demo
 
-A multi-service Spring Boot application that reads customer data from a CSV file, publishes records to Apache Kafka, and persists them to PostgreSQL via Spring Batch.
+A multi-service Spring Boot application that reads customer data from a CSV file,
+publishes records to Apache Kafka, and persists them to PostgreSQL via Spring Batch.
 
 ```
 CSV File
@@ -8,15 +9,15 @@ CSV File
    ▼
 csv-producer-service  (Spring Batch + Kafka Producer)
    │  POST /api/batch/upload
-   │  Reads CSV → publishes to healthcare.customers
+   │  Reads CSV row by row → publishes to healthcare.customers
    ▼
-Kafka (KRaft mode — no ZooKeeper)
+Kafka  (KRaft mode — no ZooKeeper)
    │  healthcare.customers
-   │  healthcare.customers-retry-0/1/2   ← Kafka-level retry
-   │  healthcare.customers.DLT           ← Dead Letter Topic
+   │  healthcare.customers-retry-0/1/2   ← automatic Kafka-level retry
+   │  healthcare.customers.DLT           ← Dead Letter Topic (poison messages)
    ▼
 consumer-service  (Kafka Consumer + Spring Batch)
-   │  Buffers messages → drains every 10s via batch job
+   │  Buffers messages → drains every 10s into Postgres via batch job
    ▼
 PostgreSQL  →  customers table
 ```
@@ -29,600 +30,424 @@ PostgreSQL  →  customers table
 |---|---|
 | Language | Java 21 (compiled) / Java 25 JRE (runtime) |
 | Framework | Spring Boot 3.2.4 |
-| Messaging | Apache Kafka 7.7.1 — KRaft mode (no ZooKeeper) |
+| Messaging | Apache Kafka — KRaft mode (no ZooKeeper) |
 | Batch | Spring Batch 5 |
 | Database | PostgreSQL 16 |
-| Retry / DLQ | Spring Kafka `@RetryableTopic` (Kafka-level) |
-| Observability | Spring Boot Actuator |
+| Retry / DLQ | Spring Kafka `@RetryableTopic` (Kafka-level, 3 retries → DLT) |
+| Observability | Spring Boot Actuator (health, metrics, env, loggers) |
+| Containers | Docker / Docker Compose |
+| Kubernetes | Minikube (local), Helm chart for deployment |
+| Kafka on K8s | Strimzi operator (KRaft mode, `KafkaNodePool`) |
 
 ---
 
-## Prerequisites
+## Spring Profiles
+
+Each service has three environment profiles:
+
+| Profile | When to use | Logging | Config source |
+|---|---|---|---|
+| `dev` | Local dev (Docker Compose, Minikube) | DEBUG | `application-dev.yml` — localhost defaults |
+| `test` | CI / integration tests | DEBUG | `application-test.yml` — env vars with test DB |
+| `qa` | QA / staging | INFO | `application-qa.yml` — env vars required (no defaults) |
+
+Active profile is set via `SPRING_PROFILES_ACTIVE` environment variable.
+Explicit OS env vars always override profile YAML values.
+
+---
+
+## Quick Start — Docker Compose
+
+The fastest way to run the full stack locally. No Kubernetes needed.
+
+### Prerequisites
 
 - Docker Desktop (with Compose v2)
 - curl
 
----
-
-## Start the full stack
+### Run
 
 ```bash
-# First run — builds images and starts all containers
+# First run — builds images and starts all containers (~3–5 min)
 docker compose up --build
 
-# Subsequent runs (no code changes)
+# Subsequent runs
 docker compose up
-
-# Detached / background mode
-docker compose up -d --build
 ```
 
-> First build takes ~3–5 minutes — Maven downloads all dependencies inside the builder container.
+### Test
+
+```bash
+# Health checks
+curl http://localhost:8081/actuator/health
+curl http://localhost:8082/actuator/health
+
+# Upload CSV — triggers the full pipeline
+curl -X POST http://localhost:8081/api/batch/upload \
+  -F "file=@sample-customers.csv"
+# Expected: Job launched. Status: COMPLETED | JobId: 1
+
+# Verify rows in Postgres (~10s after upload)
+docker exec postgres psql -U postgres -d healthcare_db \
+  -c "SELECT COUNT(*) FROM customers;"
+# Expected: 39
+```
+
+Open **http://localhost:8080** for the Kafka UI dashboard.
 
 ### Stop
 
 ```bash
-docker compose down
-```
-
-### Stop and wipe all data (volumes)
-
-```bash
-# Use this when switching Kafka cluster IDs or resetting Postgres data
-docker compose down -v
+docker compose down        # keeps data
+docker compose down -v     # wipes all volumes and data
 ```
 
 ---
 
-## Services and ports
+## Services and Ports
 
-| Service | URL | Purpose |
+| Service | Docker Compose URL | Kubernetes port |
 |---|---|---|
-| csv-producer-service | http://localhost:8081 | REST API — upload CSV |
-| consumer-service | http://localhost:8082 | Kafka consumer + batch writer |
-| Kafka UI | http://localhost:8080 | Browse topics, messages, consumer groups |
-| PostgreSQL | localhost:5432 | `healthcare_db` |
+| csv-producer-service | http://localhost:8081 | NodePort 30081 |
+| consumer-service | http://localhost:8082 | NodePort 30082 |
+| Kafka UI | http://localhost:8080 | NodePort 30080 |
+| PostgreSQL | localhost:5432 | ClusterIP (internal only) |
+| Kafka | localhost:29092 | Strimzi bootstrap :9092 (internal) |
 
 ---
 
-## Test — curl commands
-
-### 1. Health checks
-
-```bash
-# Producer
-curl http://localhost:8081/actuator/health
-
-# Consumer
-curl http://localhost:8082/actuator/health
-```
-
-### 2. Upload CSV and trigger the full pipeline
-
-```bash
-curl -X POST http://localhost:8081/api/batch/upload \
-  -F "file=@sample-customers.csv"
-```
-
-Expected response:
-```
-Job launched. Status: COMPLETED | JobId: 1
-```
-
-The consumer polls every **10 seconds** — after that window, all records appear in Postgres.
-
-### 3. Re-upload (idempotent — duplicate customer IDs are skipped by the processor)
-
-```bash
-curl -X POST http://localhost:8081/api/batch/upload \
-  -F "file=@sample-customers.csv"
-```
-
-### 4. Actuator endpoints
-
-```bash
-# Live metrics (JVM, HTTP, Kafka, batch counters)
-curl http://localhost:8081/actuator/metrics
-curl http://localhost:8082/actuator/metrics
-
-# Specific metric — Kafka records sent
-curl "http://localhost:8081/actuator/metrics/kafka.producer.record.send.total"
-
-# Resolved configuration
-curl http://localhost:8081/actuator/env
-curl http://localhost:8082/actuator/env
-
-# Change log level at runtime (no restart)
-curl -X POST http://localhost:8082/actuator/loggers/com.demo.consumer \
-  -H "Content-Type: application/json" \
-  -d '{"configuredLevel":"DEBUG"}'
-
-# App info
-curl http://localhost:8081/actuator/info
-curl http://localhost:8082/actuator/info
-```
-
----
-
-## PostgreSQL — data inspection
-
-### Connect
-
-```bash
-docker exec -it postgres psql -U postgres -d healthcare_db
-```
-
-### List all tables
-
-```sql
-\dt
-```
-
-```
- batch_job_execution           -- Spring Batch job run history
- batch_job_execution_context
- batch_job_execution_params
- batch_job_instance
- batch_step_execution          -- read / write / skip counts per step
- batch_step_execution_context
- customers                     -- application data
-```
-
-### Customer queries
-
-```sql
--- Row count
-SELECT COUNT(*) AS total FROM customers;
-
--- All customers
-SELECT customer_id, first_name, last_name, plan_type, premium_amount
-FROM customers
-ORDER BY customer_id;
-
--- Filter by plan type  (BASIC | STANDARD | PREMIUM)
-SELECT customer_id, first_name, last_name, premium_amount, assigned_hospital
-FROM customers
-WHERE plan_type = 'PREMIUM'
-ORDER BY premium_amount DESC;
-
--- Plan summary — count and average premium per plan
-SELECT plan_type,
-       COUNT(*)                                    AS total,
-       ROUND(AVG(premium_amount)::numeric, 2)      AS avg_premium,
-       MIN(premium_amount)                         AS min_premium,
-       MAX(premium_amount)                         AS max_premium
-FROM customers
-GROUP BY plan_type
-ORDER BY avg_premium DESC;
-
--- Customers with a medical condition
-SELECT customer_id, first_name, last_name, medical_condition, assigned_hospital
-FROM customers
-WHERE medical_condition <> 'None'
-ORDER BY medical_condition;
-
--- Records ingested in the last hour
-SELECT customer_id, first_name, last_name, ingested_at
-FROM customers
-WHERE ingested_at >= NOW() - INTERVAL '1 hour'
-ORDER BY ingested_at DESC;
-
--- Full schema
-\d customers
-```
-
-### Spring Batch metadata queries
-
-```sql
--- All job runs with status
-SELECT job_instance_id, job_name, start_time, end_time, status, exit_code
-FROM batch_job_execution
-ORDER BY start_time DESC;
-
--- Step-level read / write / skip counts
-SELECT step_name, start_time, status,
-       read_count, write_count, skip_count, commit_count
-FROM batch_step_execution
-ORDER BY start_time DESC;
-
--- Duration of last completed job
-SELECT job_name, start_time, end_time,
-       EXTRACT(EPOCH FROM (end_time - start_time)) AS duration_seconds
-FROM batch_job_execution
-WHERE status = 'COMPLETED'
-ORDER BY end_time DESC
-LIMIT 1;
-```
-
-### Reset customer data (keeps Batch metadata intact)
-
-```sql
-TRUNCATE TABLE customers;
-```
-
-### Exit psql
-
-```sql
-\q
-```
-
----
-
-## Kafka — CLI commands
-
-```bash
-# List all topics
-docker exec kafka kafka-topics --bootstrap-server localhost:29092 --list
-
-# Describe the main topic (partitions, replication)
-docker exec kafka kafka-topics --bootstrap-server localhost:29092 \
-  --describe --topic healthcare.customers
-
-# Consume from beginning — main topic
-docker exec kafka kafka-console-consumer \
-  --bootstrap-server localhost:29092 \
-  --topic healthcare.customers \
-  --from-beginning
-
-# Inspect dead-letter messages
-docker exec kafka kafka-console-consumer \
-  --bootstrap-server localhost:29092 \
-  --topic healthcare.customers.DLT \
-  --from-beginning
-
-# Consumer group lag (how far behind the consumer is)
-docker exec kafka kafka-consumer-groups \
-  --bootstrap-server localhost:29092 \
-  --describe --group healthcare-consumer-group
-```
-
-Browse all topics and messages visually at **http://localhost:8080** (Kafka UI).
-
----
-
-## Kafka topics
+## Kafka Topics
 
 | Topic | Purpose | Retention |
 |---|---|---|
 | `healthcare.customers` | Main ingest topic | 24 h |
-| `healthcare.customers-retry-0` | 1st retry — 2 s delay | 1 h |
-| `healthcare.customers-retry-1` | 2nd retry — 4 s delay | 1 h |
-| `healthcare.customers-retry-2` | 3rd retry — 8 s delay | 1 h |
+| `healthcare.customers-retry-0` | 1st retry — ~2 s delay | 1 h |
+| `healthcare.customers-retry-1` | 2nd retry — ~4 s delay | 1 h |
+| `healthcare.customers-retry-2` | 3rd retry — ~8 s delay | 1 h |
 | `healthcare.customers.DLT` | Dead Letter Topic | 7 days |
 
 ---
 
-## Logs
-
-```bash
-# Tail all services
-docker compose logs -f
-
-# Single service
-docker compose logs -f consumer-service
-docker compose logs -f csv-producer-service
-docker compose logs -f kafka
-```
-
----
-
-## Project structure
+## Project Structure
 
 ```
 healthcare-insurance-demo/
+├── COMMANDS.md                      ← All commands for macOS setup and testing
 ├── docker-compose.yml
-├── pom.xml                          (parent — Java 21 target, multi-module)
+├── pom.xml                          (parent — multi-module, Java 21 target)
 ├── sample-customers.csv
 │
 ├── csv-producer-service/
-│   ├── Dockerfile                   (build: Java 21 JDK / run: Java 25 JRE)
+│   ├── Dockerfile
 │   └── src/main/
 │       ├── java/com/demo/producer/
 │       │   ├── batch/CsvToBatchConfig.java        (CSV reader → Kafka writer step)
-│       │   ├── config/AppConfig.java
 │       │   ├── config/BatchTriggerController.java  (POST /api/batch/upload)
 │       │   ├── kafka/CustomerKafkaProducer.java
 │       │   └── model/Customer.java
-│       └── resources/application.yml
+│       └── resources/
+│           ├── application.yml                    (base — port, driver, batch config)
+│           ├── application-dev.yml                (localhost defaults, DEBUG logging)
+│           ├── application-test.yml               (env vars + test DB, DEBUG logging)
+│           └── application-qa.yml                 (env vars required, INFO logging)
 │
-└── consumer-service/
-    ├── Dockerfile                   (build: Java 21 JDK / run: Java 25 JRE)
-    └── src/main/
-        ├── java/com/demo/consumer/
-        │   ├── batch/CustomerPersistBatchConfig.java  (queue → Postgres batch step)
-        │   ├── config/AppConfig.java                  (@EnableScheduling, async launcher)
-        │   ├── kafka/CustomerKafkaListener.java        (@RetryableTopic + @DltHandler)
-        │   ├── model/CustomerDto.java
-        │   ├── model/CustomerEntity.java
-        │   └── repository/CustomerRepository.java
-        └── resources/application.yml
+├── consumer-service/
+│   ├── Dockerfile
+│   └── src/main/
+│       ├── java/com/demo/consumer/
+│       │   ├── batch/CustomerPersistBatchConfig.java  (queue → Postgres batch step)
+│       │   ├── kafka/CustomerKafkaListener.java        (@RetryableTopic + @DltHandler)
+│       │   ├── model/CustomerEntity.java
+│       │   └── repository/CustomerRepository.java
+│       └── resources/
+│           ├── application.yml                    (base — JPA, Kafka consumer config)
+│           ├── application-dev.yml                (localhost, group-id: healthcare-consumer-group)
+│           ├── application-test.yml               (test group-id, DEBUG logging)
+│           └── application-qa.yml                 (qa group-id, INFO logging)
+│
+├── k8s/                             ← Raw Kubernetes manifests (for learning K8s)
+│   ├── 01-namespace.yaml            (Namespace "healthcare")
+│   ├── 02-postgres.yaml             (PVC + Deployment + Service)
+│   ├── 03-kafka.yaml                (KRaft Deployment + Service — manual workarounds)
+│   ├── 04-kafka-init.yaml           (Job — creates all 5 Kafka topics via CLI)
+│   ├── 05-kafka-ui.yaml             (Deployment + NodePort Service)
+│   ├── 06-producer.yaml             (Deployment + NodePort Service)
+│   └── 07-consumer.yaml             (Deployment + NodePort Service)
+│
+└── helm/healthcare/                 ← Helm chart (recommended approach)
+    ├── Chart.yaml
+    ├── values.yaml                  (dev defaults)
+    ├── values-test.yaml             (test overrides)
+    ├── values-qa.yaml               (QA overrides — larger resources)
+    └── templates/
+        ├── _helpers.tpl             (shared label helper)
+        ├── namespace.yaml
+        ├── postgres.yaml
+        ├── kafka.yaml               (Strimzi Kafka CR + KafkaNodePool)
+        ├── kafka-topics.yaml        (5 × KafkaTopic CRs — replaces kafka-init Job)
+        ├── kafka-ui.yaml
+        ├── producer.yaml
+        └── consumer.yaml
 ```
 
 ---
 
 ## Kubernetes with Minikube
 
-Run the full stack on a local Kubernetes cluster using Minikube.
+Two deployment approaches are available.
+**Helm + Strimzi is recommended** — no manual workarounds, declarative topics.
 
-### Prerequisites
+---
 
-**Windows** (PowerShell as admin)
-```powershell
-winget install Kubernetes.minikube
-winget install Kubernetes.kubectl
+### Approach 1 — Raw k8s/ manifests (learning-focused)
 
-# Verify
-minikube version
-kubectl version --client
-```
+Each file in `k8s/` is heavily commented to explain every Kubernetes concept.
+Good for understanding what each resource type does before moving to Helm.
 
-**macOS**
+#### Prerequisites
+
 ```bash
+# macOS
 brew install minikube kubectl
-
-# Verify
-minikube version
-kubectl version --client
 ```
 
-### k8s/ folder structure
-
-```
-k8s/
-├── 01-namespace.yaml      # Namespace "healthcare"
-├── 02-postgres.yaml       # PVC + Deployment + Service
-├── 03-kafka.yaml          # KRaft Deployment + Service
-├── 04-kafka-init.yaml     # Job — creates all Kafka topics
-├── 05-kafka-ui.yaml       # Deployment + NodePort Service
-├── 06-producer.yaml       # Deployment + NodePort Service
-└── 07-consumer.yaml       # Deployment + NodePort Service
-```
-
----
-
-### Step 1 — Start Minikube
+#### Run
 
 ```bash
-# Start with enough memory for Kafka + Postgres + 2 Spring Boot apps
+# 1. Start Minikube
 minikube start --memory=4096 --cpus=2
-```
 
----
-
-### Step 2 — Build images inside Minikube's Docker daemon
-
-Minikube runs its own Docker daemon. Point your local Docker CLI at it,
-then build — images land directly inside Minikube, no push to a registry needed.
-
-> **Important:** You must run the `docker-env` command in **every new terminal session**
-> before building. If you skip it, the images won't be visible to Minikube.
-
-**macOS / Linux**
-```bash
-# Point Docker CLI at Minikube's daemon
+# 2. Build images inside Minikube
 eval $(minikube docker-env)
-
-# Build both app images (run from the project root)
 docker build -t csv-producer-service:latest -f csv-producer-service/Dockerfile .
 docker build -t consumer-service:latest     -f consumer-service/Dockerfile .
 
-# Confirm images are visible inside Minikube
-docker images | grep -E "csv-producer|consumer-service"
-```
-
-**Windows** (PowerShell)
-```powershell
-# Point Docker CLI at Minikube's daemon
-& minikube -p minikube docker-env --shell powershell | Invoke-Expression
-
-# Build both app images (run from the project root)
-docker build -t csv-producer-service:latest -f csv-producer-service/Dockerfile .
-docker build -t consumer-service:latest     -f consumer-service/Dockerfile .
-
-# Confirm images are visible inside Minikube
-docker images | Select-String "csv-producer|consumer-service"
-```
-
-> First build takes ~3–5 minutes — Maven downloads all dependencies inside the builder container.
-
----
-
-### Step 3 — Deploy everything
-
-```bash
-# Apply all 7 manifests in one shot (numbered order is respected)
+# 3. Deploy all resources
 kubectl apply -f k8s/
 
-# Watch pods come up — wait until all are 1/1 Running (Ctrl+C to exit)
+# 4. Watch pods (wait for all 1/1 Running)
 kubectl get pods -n healthcare -w
 ```
 
-Expected final state (takes ~2–3 minutes):
+#### Access
 
-```
-NAME                                   READY   STATUS      RESTARTS
-postgres-xxxx                          1/1     Running     0
-kafka-xxxx                             1/1     Running     0
-kafka-init-xxxx                        0/1     Completed   0
-kafka-ui-xxxx                          1/1     Running     0
-csv-producer-service-xxxx              1/1     Running     0
-consumer-service-xxxx                  1/1     Running     0
+```bash
+# Port-forward (recommended on macOS — minikube service can hang)
+kubectl port-forward svc/csv-producer-service 8081:8081 -n healthcare &
+kubectl port-forward svc/kafka-ui             8080:8080 -n healthcare &
 ```
 
-> The app pods (producer/consumer) may restart 2–3 times while waiting for Kafka and
-> Postgres to be ready. This is normal — Kubernetes will keep retrying automatically.
+#### Tear down
+
+```bash
+kubectl delete -f k8s/
+minikube stop
+```
 
 ---
 
-### Step 4 — Get service URLs
+### Approach 2 — Helm + Strimzi (recommended)
 
-**macOS / Linux**
-```bash
-minikube service csv-producer-service -n healthcare --url
-minikube service consumer-service     -n healthcare --url
-minikube service kafka-ui             -n healthcare --url
-```
+Uses the [Strimzi operator](https://strimzi.io) to manage Kafka on Kubernetes.
+Topics are declared as `KafkaTopic` custom resources — no shell-script Job needed.
 
-**Windows** (PowerShell)
-```powershell
-minikube service csv-producer-service -n healthcare --url
-minikube service consumer-service     -n healthcare --url
-minikube service kafka-ui             -n healthcare --url
-```
+**What Strimzi gives you over the raw k8s/ approach:**
 
-Or open directly in the browser:
-```bash
-minikube service csv-producer-service -n healthcare
-minikube service kafka-ui             -n healthcare
-```
+| | Raw k8s/ | Helm + Strimzi |
+|---|---|---|
+| Kafka resource type | `Deployment` (manual) | `StatefulSet` (operator-managed) |
+| Topic creation | One-shot Job (shell script) | `KafkaTopic` CRs (declarative, reconciled) |
+| KRaft workarounds | 3 manual fixes needed | Operator handles everything |
+| Upgrade strategy | Manual pod restart | Operator does controlled rolling restart |
+| Topic drift protection | None | Operator recreates deleted topics |
 
-Alternatively, use `kubectl port-forward` (works on all OS without needing the Minikube IP):
+#### Prerequisites
 
 ```bash
-# Terminal 1 — producer
-kubectl port-forward -n healthcare svc/csv-producer-service 8081:8081
-
-# Terminal 2 — consumer
-kubectl port-forward -n healthcare svc/consumer-service 8082:8082
-
-# Terminal 3 — Kafka UI
-kubectl port-forward -n healthcare svc/kafka-ui 8080:8080
+# macOS
+brew install minikube kubectl helm
 ```
 
-Then access at `http://localhost:8081`, `http://localhost:8082`, `http://localhost:8080`.
-
----
-
-### Step 5 — Test with curl
-
-Replace `<PRODUCER_URL>` with the URL from Step 4 (or use `http://localhost:8081` if port-forwarding).
+#### One-time operator setup
 
 ```bash
-# Health checks — both should return {"status":"UP"}
-curl <PRODUCER_URL>/actuator/health
-curl <CONSUMER_URL>/actuator/health
+# Start Minikube
+minikube start --memory=4096 --cpus=2
 
-# Upload CSV → triggers the full pipeline
-curl -X POST <PRODUCER_URL>/api/batch/upload \
-  -F "file=@sample-customers.csv"
+# Install Strimzi operator
+kubectl create namespace strimzi
+kubectl create -f 'https://strimzi.io/install/latest?namespace=strimzi' -n strimzi
+kubectl rollout status deployment/strimzi-cluster-operator -n strimzi --timeout=120s
 
-# Expected response:
-# Job launched. Status: COMPLETED | JobId: 1
+# Configure operator to watch healthcare namespace
+kubectl set env deployment/strimzi-cluster-operator \
+  STRIMZI_NAMESPACE="healthcare" -n strimzi
+
+# Create and prepare healthcare namespace for Helm
+kubectl create namespace healthcare
+kubectl label namespace healthcare app.kubernetes.io/managed-by=Helm
+kubectl annotate namespace healthcare \
+  meta.helm.sh/release-name=healthcare \
+  meta.helm.sh/release-namespace=healthcare
+
+# Grant Strimzi RBAC permissions in healthcare namespace
+kubectl create rolebinding strimzi-cluster-operator \
+  --clusterrole=strimzi-cluster-operator-namespaced \
+  --serviceaccount=strimzi:strimzi-cluster-operator -n healthcare
+
+kubectl create rolebinding strimzi-cluster-operator-strimzi-entity-operator \
+  --clusterrole=strimzi-entity-operator \
+  --serviceaccount=strimzi:strimzi-cluster-operator -n healthcare
+
+kubectl create rolebinding strimzi-cluster-operator-strimzi-cluster-operator-watched \
+  --clusterrole=strimzi-cluster-operator-watched \
+  --serviceaccount=strimzi:strimzi-cluster-operator -n healthcare
 ```
 
-Wait ~10 seconds for the consumer batch job to drain, then verify data in Postgres:
+#### Build images and deploy
 
 ```bash
-# Row count — should be 39
+# Build images inside Minikube
+eval $(minikube docker-env)
+docker build -t csv-producer-service:latest -f csv-producer-service/Dockerfile .
+docker build -t consumer-service:latest     -f consumer-service/Dockerfile .
+
+# Lint the chart
+helm lint helm/healthcare/
+
+# Deploy
+helm install healthcare helm/healthcare/ -n healthcare
+
+# Watch pods (the Strimzi Kafka image is ~600MB — allow 3-5 min on first run)
+kubectl get pods -n healthcare -w
+```
+
+#### Verify Strimzi
+
+```bash
+# Kafka cluster — READY: True
+kubectl get kafka -n healthcare
+
+# Topics — all 5 READY: True
+kubectl get kafkatopics -n healthcare
+
+# Services Strimzi created
+kubectl get svc -n healthcare | grep kafka
+# healthcare-kafka-bootstrap  ClusterIP  9092  ← what Spring connects to
+```
+
+#### Test
+
+```bash
+kubectl port-forward svc/csv-producer-service 8081:8081 -n healthcare &
+
+curl http://localhost:8081/actuator/health
+curl -X POST http://localhost:8081/api/batch/upload -F "file=@sample-customers.csv"
+
 kubectl exec -n healthcare deployment/postgres -- \
   psql -U postgres -d healthcare_db -c "SELECT COUNT(*) FROM customers;"
+# Expected: 39
+```
 
-# Preview first 5 rows
-kubectl exec -n healthcare deployment/postgres -- \
-  psql -U postgres -d healthcare_db \
-  -c "SELECT customer_id, first_name, plan_type, premium_amount FROM customers LIMIT 5;"
+#### Tear down
+
+```bash
+helm uninstall healthcare -n healthcare
+kubectl delete namespace healthcare
+minikube stop
 ```
 
 ---
 
-### Useful kubectl commands
+## PostgreSQL — Data Inspection
 
 ```bash
-# List all pods, services, deployments in the namespace
-kubectl get all -n healthcare
+# Connect (Docker Compose)
+docker exec -it postgres psql -U postgres -d healthcare_db
 
-# Live pod logs
-kubectl logs -n healthcare deployment/consumer-service -f
-kubectl logs -n healthcare deployment/csv-producer-service -f
-kubectl logs -n healthcare deployment/kafka -f
+# Connect (Kubernetes)
+kubectl exec -it -n healthcare deployment/postgres -- psql -U postgres -d healthcare_db
+```
 
-# Describe a pod — shows events, env vars, probe status (great for debugging)
-kubectl describe pod -n healthcare -l app=kafka
-kubectl describe pod -n healthcare -l app=consumer-service
+```sql
+\dt                          -- list all tables
+SELECT COUNT(*) FROM customers;
+SELECT customer_id, first_name, last_name, plan_type, premium_amount
+FROM customers LIMIT 10;
 
-# Shell into a running pod
-kubectl exec -it -n healthcare deployment/postgres -- bash
-kubectl exec -it -n healthcare deployment/kafka   -- bash
+SELECT plan_type, COUNT(*), ROUND(AVG(premium_amount)::numeric, 2) AS avg_premium
+FROM customers GROUP BY plan_type ORDER BY avg_premium DESC;
 
-# Check Job completion
-kubectl get jobs -n healthcare
-kubectl logs   -n healthcare job/kafka-init
+-- Spring Batch job history
+SELECT job_name, start_time, status, exit_code
+FROM batch_job_execution ORDER BY start_time DESC;
 
-# List Kafka topics (exec inside the Kafka pod)
+TRUNCATE TABLE customers;    -- reset data
+\q                           -- exit
+```
+
+---
+
+## Kafka — CLI Commands
+
+```bash
+# Docker Compose
+docker exec kafka kafka-topics --bootstrap-server localhost:29092 --list
+
+# Kubernetes (raw k8s/ approach)
 kubectl exec -n healthcare deployment/kafka -- \
   kafka-topics --bootstrap-server localhost:29092 --list
 
-# Describe the main topic (partitions, replication factor)
-kubectl exec -n healthcare deployment/kafka -- \
-  kafka-topics --bootstrap-server localhost:29092 \
-  --describe --topic healthcare.customers
+# Kubernetes (Helm + Strimzi)
+kubectl exec -n healthcare healthcare-dual-role-0 -- \
+  bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 
 # Consumer group lag
 kubectl exec -n healthcare deployment/kafka -- \
   kafka-consumer-groups --bootstrap-server localhost:29092 \
   --describe --group healthcare-consumer-group
-
-# Restart a deployment (e.g. after a config change)
-kubectl rollout restart deployment/consumer-service -n healthcare
-
-# Check rollout status
-kubectl rollout status deployment/kafka -n healthcare
 ```
 
 ---
 
-### Tear down
+## Actuator Endpoints
 
 ```bash
-# Delete all resources in the namespace (keeps Minikube running)
-kubectl delete -f k8s/
+# Health (DB + Kafka status)
+curl http://localhost:8081/actuator/health
+curl http://localhost:8082/actuator/health
 
-# Or delete the entire namespace at once
-kubectl delete namespace healthcare
+# Metrics
+curl http://localhost:8081/actuator/metrics
+curl "http://localhost:8081/actuator/metrics/kafka.producer.record.send.total"
 
-# Stop Minikube (preserves cluster state — fast to resume)
-minikube stop
+# Active configuration
+curl http://localhost:8081/actuator/env
 
-# Delete the cluster entirely (clean slate for next run)
-minikube delete
+# Change log level at runtime
+curl -X POST http://localhost:8082/actuator/loggers/com.demo.consumer \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"DEBUG"}'
 ```
 
 ---
 
-### Design notes — Kafka on Kubernetes
+## All Commands in One Place
 
-Three non-obvious things fixed in `k8s/03-kafka.yaml` that are worth understanding:
-
-**1. `enableServiceLinks: false`**
-Kubernetes auto-injects env vars like `KAFKA_PORT=tcp://10.x.x.x:29092` for every
-Service in the namespace. Because our Service is named `kafka`, K8s injects `KAFKA_PORT`
-into the Kafka pod. The Confluent image treats every `KAFKA_*` env var as a broker config
-and crashes. Disabling service-link injection removes the collision entirely.
-
-**2. `KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093` (not `kafka:9093`)**
-Using the Service DNS name (`kafka:9093`) for the KRaft quorum creates a circular
-dependency: the Service has no ready endpoints until the pod is healthy, but the pod
-needs to reach the controller port to start. Since the broker and controller run in the
-same pod, `localhost` always resolves correctly.
-
-**3. `tcpSocket` readiness/liveness probes (not `kafka-topics --list`)**
-The `kafka-topics` CLI bootstraps via `localhost:29092` but then follows
-`KAFKA_ADVERTISED_LISTENERS` (`kafka:29092` = Service ClusterIP) for the actual request.
-The Service has no endpoints until the probe passes — another circular dependency.
-A raw TCP socket check just verifies the port is open and avoids the redirect entirely.
+See [COMMANDS.md](COMMANDS.md) for the complete, step-by-step command reference
+covering Docker Compose, raw Kubernetes, and Helm + Strimzi on macOS.
 
 ---
 
-### Troubleshooting
+## Troubleshooting
 
-| Symptom | Command | Common cause |
+| Symptom | Command | Fix |
 |---|---|---|
-| Pod stuck in `Pending` | `kubectl describe pod -n healthcare <name>` | Not enough memory — increase `minikube start --memory` |
-| Pod in `ImagePullBackOff` | `kubectl describe pod -n healthcare <name>` | Image not built inside Minikube daemon — re-run `docker-env` + `docker build` |
-| App pods restart 2–3 times on start | `kubectl logs -n healthcare deployment/<name>` | Normal — Postgres/Kafka not ready yet, K8s retries automatically |
-| `kafka-init` Job stuck | `kubectl logs -n healthcare job/kafka-init` | Kafka readiness probe not yet passed — wait a bit longer |
-| `eval $(minikube docker-env)` lost | Re-run in the current terminal | Shell env is per-session — must repeat after opening a new terminal |
-| `Invoke-Expression` error (Windows) | Use PowerShell, not CMD | `minikube docker-env` output only works in PowerShell |
-| `minikube` not found (Windows) | Add `C:\Program Files\Kubernetes\Minikube` to PATH | `winget` installs but may not update PATH in the current session |
-| `brew: command not found` (macOS) | Install Homebrew first | See https://brew.sh |
-| Port-forward disconnects | Re-run the `kubectl port-forward` command | port-forward connections drop if the pod restarts |
+| `ImagePullBackOff` | `kubectl describe pod -n healthcare <name>` | Re-run `eval $(minikube docker-env)` then rebuild |
+| Pod stuck `Pending` | `kubectl describe pod -n healthcare <name>` | Not enough memory — restart Minikube with `--memory=6144` |
+| App pods restart 2–3× on start | `kubectl logs -n healthcare deployment/<name>` | Normal — waiting for Postgres/Kafka. Kubernetes retries automatically |
+| Strimzi operator `CrashLoopBackOff` | `kubectl logs -n strimzi deployment/strimzi-cluster-operator` | Missing RoleBinding — re-run the `kubectl create rolebinding` commands |
+| `helm install` namespace error | `kubectl get namespace healthcare` | Namespace exists without Helm labels — run `kubectl label` + `kubectl annotate` commands |
+| Port-forward disconnects | Re-run `kubectl port-forward` | Normal — connection drops when pod restarts |
+| `minikube service` hangs on macOS | Use `kubectl port-forward` instead | Known macOS issue — port-forward always works |
+| `eval $(minikube docker-env)` lost | Re-run in current terminal | Shell env is per-session — must repeat in each new terminal |

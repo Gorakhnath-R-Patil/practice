@@ -1,22 +1,50 @@
-# ── Kafka Topic Init — Job ────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+#  FILE: 04-kafka-init.yaml
+#  KIND: Job
+# ═══════════════════════════════════════════════════════════════════════════════
 #
-# A Job runs a pod to completion exactly once (unlike a Deployment which keeps
-# the pod running). Perfect for one-shot tasks like creating Kafka topics.
+#  WHAT IS A JOB?
+#  ──────────────
+#  A Job runs a pod to COMPLETION — once the container exits with code 0,
+#  the Job is marked "Completed" and the pod is not restarted.
+#  This is the right choice for one-shot tasks like database migrations,
+#  data seeding, or in this case — creating Kafka topics.
 #
-# This Job creates:
-#   healthcare.customers          ← main ingest topic
-#   healthcare.customers-retry-0  ← 1st retry  (2s delay, managed by @RetryableTopic)
-#   healthcare.customers-retry-1  ← 2nd retry  (4s delay)
-#   healthcare.customers-retry-2  ← 3rd retry  (8s delay)
-#   healthcare.customers.DLT      ← Dead Letter Topic (poison pill messages land here)
+#  Compare to a Deployment, which keeps restarting the pod forever.
 #
-# The script loops until Kafka is reachable before creating topics,
-# so it's safe to apply even before Kafka's readiness probe passes.
+#  WHAT DOES THIS JOB DO?
+#  ──────────────────────
+#  Runs a shell script that:
+#    1. Waits in a loop until Kafka is reachable (polling with kafka-topics --list)
+#    2. Creates all 5 Kafka topics needed by the application:
 #
-# Apply:  kubectl apply -f k8s/04-kafka-init.yaml
-# Verify: kubectl get jobs -n healthcare
-#         kubectl logs -n healthcare job/kafka-init
-# ─────────────────────────────────────────────────────────────────────────────
+#       healthcare.customers          ← main ingest topic (CSV rows land here)
+#       healthcare.customers-retry-0  ← 1st automatic retry (2s delay)
+#       healthcare.customers-retry-1  ← 2nd automatic retry (4s delay)
+#       healthcare.customers-retry-2  ← 3rd automatic retry (8s delay)
+#       healthcare.customers.DLT      ← Dead Letter Topic (messages that failed all retries)
+#
+#  WHY CREATE TOPICS IN ADVANCE?
+#  ──────────────────────────────
+#  Kafka can auto-create topics when a producer first publishes, but:
+#    • Auto-created topics use default settings (1 partition, 1 replica)
+#    • We want 3 partitions for parallelism and specific retention settings
+#    • The retry/DLT topics MUST exist before the consumer starts, otherwise
+#      @RetryableTopic will fail trying to publish to them
+#
+#  WHY USE THE CONFLUENT IMAGE FOR THIS JOB?
+#  ────────────────────────────────────────────
+#  The kafka-topics CLI tool ships with the Confluent Kafka image.
+#  We reuse it here instead of installing a separate CLI container.
+#
+#  NOTE: This file is used by the raw k8s/ approach.
+#  The Helm chart (helm/) replaces this Job with Strimzi KafkaTopic CRs,
+#  which is cleaner and declarative — no shell script needed.
+#
+#  APPLY:   kubectl apply -f k8s/04-kafka-init.yaml
+#  VERIFY:  kubectl get jobs -n healthcare
+#           kubectl logs -n healthcare job/kafka-init
+# ═══════════════════════════════════════════════════════════════════════════════
 
 apiVersion: batch/v1
 kind: Job
@@ -24,25 +52,35 @@ metadata:
   name: kafka-init
   namespace: healthcare
 spec:
-  # backoffLimit — how many times Kubernetes retries the Job if it fails.
-  # Kafka might not be ready the first time, so allow a few retries.
+  # backoffLimit: how many times Kubernetes retries this Job if it fails.
+  # The script might fail on the first attempt if Kafka is still starting up.
+  # 5 retries gives Kafka enough time to become ready in a slow environment.
   backoffLimit: 5
 
   template:
     spec:
-      # restartPolicy for Job pods must be OnFailure or Never (not Always).
-      # OnFailure → restart the container if it exits with non-zero code.
+      # Jobs require restartPolicy to be OnFailure or Never.
+      # OnFailure → if the container exits with a non-zero code, restart it.
+      # The script only exits successfully when all topics are created.
       restartPolicy: OnFailure
 
       containers:
         - name: kafka-init
+          # Reuse the same Kafka image — it includes the kafka-topics CLI tool.
+          # We don't need to pull a separate image just for admin commands.
           image: confluentinc/cp-kafka:7.7.1
+
+          # Run a bash script as the container's entrypoint.
+          # ["/bin/bash", "-c"] means: execute the following string as a shell script.
           command: ["/bin/bash", "-c"]
           args:
             - |
               echo "=== Waiting for Kafka to be ready ==="
-              # Loop until the broker responds — handles the case where
-              # this Job starts before Kafka's readiness probe passes.
+
+              # Poll until Kafka responds. This loop handles the timing gap:
+              # even if this Job starts before the Kafka pod's readiness probe passes,
+              # the script just waits instead of failing immediately.
+              # --list returns exit code 0 when the broker is reachable.
               until kafka-topics --bootstrap-server kafka:29092 --list > /dev/null 2>&1; do
                 echo "Kafka not ready yet, retrying in 5s..."
                 sleep 5
@@ -50,12 +88,19 @@ spec:
 
               echo "=== Kafka is ready — creating topics ==="
 
+              # --if-not-exists means: create only if the topic doesn't already exist.
+              # This makes the script idempotent — safe to re-run if the Job is retried.
+
+              # Main ingest topic — CSV rows published here by the producer
+              # 3 partitions allows 3 consumer threads to read in parallel
               kafka-topics --create --if-not-exists \
                 --bootstrap-server kafka:29092 \
                 --topic healthcare.customers \
                 --partitions 3 \
-                --replication-factor 1
+                --replication-factor 1    # 1 replica = only 1 broker (fine for dev)
 
+              # Retry topic 0 — consumer re-reads a failed message after ~2s
+              # retention.ms=3600000 = keep messages for 1 hour before auto-deleting
               kafka-topics --create --if-not-exists \
                 --bootstrap-server kafka:29092 \
                 --topic healthcare.customers-retry-0 \
@@ -63,6 +108,7 @@ spec:
                 --replication-factor 1 \
                 --config retention.ms=3600000
 
+              # Retry topic 1 — second attempt, ~4s delay
               kafka-topics --create --if-not-exists \
                 --bootstrap-server kafka:29092 \
                 --topic healthcare.customers-retry-1 \
@@ -70,6 +116,7 @@ spec:
                 --replication-factor 1 \
                 --config retention.ms=3600000
 
+              # Retry topic 2 — third and final attempt, ~8s delay
               kafka-topics --create --if-not-exists \
                 --bootstrap-server kafka:29092 \
                 --topic healthcare.customers-retry-2 \
@@ -77,6 +124,8 @@ spec:
                 --replication-factor 1 \
                 --config retention.ms=3600000
 
+              # Dead Letter Topic — messages land here after exhausting all 3 retries.
+              # retention.ms=604800000 = keep for 7 days so you can investigate failures.
               kafka-topics --create --if-not-exists \
                 --bootstrap-server kafka:29092 \
                 --topic healthcare.customers.DLT \
@@ -84,11 +133,13 @@ spec:
                 --replication-factor 1 \
                 --config retention.ms=604800000
 
-              echo "=== All topics created ==="
+              echo "=== All topics created. Final topic list: ==="
+              # Print all topics to confirm creation — visible in: kubectl logs job/kafka-init
               kafka-topics --bootstrap-server kafka:29092 --list
+
           resources:
             requests:
-              memory: "128Mi"
+              memory: "128Mi"   # The kafka-topics CLI is lightweight
               cpu: "100m"
             limits:
               memory: "256Mi"

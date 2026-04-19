@@ -1,17 +1,43 @@
-# ── Namespace ────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+#  FILE: 01-namespace.yaml
+#  KIND: Namespace
+# ═══════════════════════════════════════════════════════════════════════════════
 #
-# A Namespace is a logical boundary inside a Kubernetes cluster.
-# Everything in this project (pods, services, jobs) lives under "healthcare"
-# so it doesn't mix with other workloads in the default namespace.
+#  WHAT IS A NAMESPACE?
+#  ─────────────────────
+#  A Namespace is a logical partition inside a Kubernetes cluster.
+#  Think of it like a folder — everything in this project lives under
+#  the "healthcare" folder so it doesn't collide with other apps running
+#  in the same cluster (e.g., in the "default" namespace).
 #
-# Apply:  kubectl apply -f k8s/01-namespace.yaml
-# Verify: kubectl get namespaces
-# ─────────────────────────────────────────────────────────────────────────────
+#  WHY DO WE NEED IT?
+#  ──────────────────
+#  Without a namespace, all apps share the "default" namespace.
+#  That works fine for one app, but causes name collisions when you run
+#  multiple apps (e.g., two apps both have a service named "postgres").
+#
+#  Namespaces also let you:
+#    • Apply RBAC permissions at namespace scope
+#    • Set resource quotas (max CPU/memory this namespace can use)
+#    • Delete everything in one shot: kubectl delete namespace healthcare
+#
+#  HOW IT FITS THE PROJECT:
+#  ─────────────────────────
+#  This file must be applied FIRST — all other YAML files reference
+#  namespace: healthcare. If the namespace doesn't exist yet, those
+#  resources will fail to create.
+#
+#  APPLY:   kubectl apply -f k8s/01-namespace.yaml
+#  VERIFY:  kubectl get namespaces
+#           kubectl get all -n healthcare   (will be empty right after creation)
+# ═══════════════════════════════════════════════════════════════════════════════
 
-apiVersion: v1
-kind: Namespace
+apiVersion: v1          # The Kubernetes API version for core resources (Pods, Services, Namespaces)
+kind: Namespace         # We are creating a Namespace resource
 metadata:
-  name: healthcare
+  name: healthcare      # Every kubectl command will use -n healthcare to target this namespace
   labels:
-    # Labels are arbitrary key-value pairs — useful for filtering with kubectl
+    # Labels are arbitrary key=value pairs you attach to any K8s resource.
+    # They don't affect behaviour but allow you to query/filter:
+    #   kubectl get namespaces -l project=healthcare-insurance-demo
     project: healthcare-insurance-demo

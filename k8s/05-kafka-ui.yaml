@@ -1,16 +1,45 @@
-# ── Kafka UI — Deployment + Service ──────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+#  FILE: 05-kafka-ui.yaml
+#  KINDS: Deployment  →  Service (NodePort)
+# ═══════════════════════════════════════════════════════════════════════════════
 #
-# Kafka UI is a web dashboard to browse topics, messages, and consumer groups.
-# It's stateless — no storage needed, just a Deployment.
+#  WHAT THIS FILE DOES:
+#  ─────────────────────
+#  Deploys Kafka UI — a web-based dashboard to visually inspect the Kafka cluster:
+#    • Browse all topics and their partitions
+#    • Read messages from any topic (great for debugging)
+#    • Monitor consumer groups and see how far behind they are (lag)
+#    • Check broker configuration
 #
-# Access: minikube service kafka-ui -n healthcare
+#  WHY IS THIS USEFUL?
+#  ────────────────────
+#  Without Kafka UI you'd have to exec into the Kafka pod and run
+#  kafka-topics / kafka-console-consumer CLI commands every time.
+#  The UI gives the same information in a browser — much easier to use.
 #
-# Apply:  kubectl apply -f k8s/05-kafka-ui.yaml
-# Verify: kubectl get pods -n healthcare -l app=kafka-ui
-# ─────────────────────────────────────────────────────────────────────────────
+#  HOW TO ACCESS IT:
+#  ──────────────────
+#  The Service uses NodePort 30080. On Minikube:
+#
+#    minikube service kafka-ui -n healthcare
+#      → opens browser automatically OR prints the URL
+#
+#    OR via port-forward (works on all OS):
+#    kubectl port-forward svc/kafka-ui 8080:8080 -n healthcare
+#      → then open http://localhost:8080
+#
+#  APPLY:   kubectl apply -f k8s/05-kafka-ui.yaml
+#  VERIFY:  kubectl get pods -n healthcare -l app=kafka-ui
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
-# ── 1. Deployment ─────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+#  RESOURCE 1: Deployment
+# ───────────────────────────────────────────────────────────────────────────────
+#
+#  Kafka UI is a stateless web app — no PVC needed.
+#  It connects to Kafka over the internal cluster network using the Service DNS name.
+# ───────────────────────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,28 +48,37 @@ metadata:
   labels:
     app: kafka-ui
 spec:
-  replicas: 1
+  replicas: 1             # One instance is plenty for a dev/demo environment
   selector:
     matchLabels:
       app: kafka-ui
   template:
     metadata:
       labels:
-        app: kafka-ui
+        app: kafka-ui     # Must match selector.matchLabels above
     spec:
       containers:
         - name: kafka-ui
+          # provectuslabs/kafka-ui — popular open-source Kafka UI written in Java/React
           image: provectuslabs/kafka-ui:latest
           ports:
-            - containerPort: 8080
+            - containerPort: 8080   # Kafka UI serves its web interface on port 8080
+
           env:
-            # Tell Kafka UI which cluster to connect to.
-            # "kafka:29092" resolves via Kubernetes DNS to the kafka Service.
+            # Kafka UI supports multiple clusters. Each cluster gets an index (0, 1, 2...).
+            # We configure one cluster named "local".
+
+            # Friendly display name shown in the UI's cluster dropdown
             - name: KAFKA_CLUSTERS_0_NAME
               value: "local"
+
+            # Bootstrap server: the Kafka broker address to connect to.
+            # "kafka:29092" resolves via Kubernetes DNS to the kafka Service
+            # defined in 03-kafka.yaml.
+            # KRaft mode doesn't need a ZooKeeper address — just the broker.
             - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
               value: "kafka:29092"
-            # No ZOOKEEPER entry — KRaft mode doesn't use ZooKeeper
+
           resources:
             requests:
               memory: "256Mi"
@@ -51,23 +89,35 @@ spec:
 
 ---
 
-# ── 2. Service ────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+#  RESOURCE 2: Service  (NodePort)
+# ───────────────────────────────────────────────────────────────────────────────
 #
-# type: NodePort → makes the Service reachable from OUTSIDE the cluster.
-# Kubernetes assigns a port in the 30000-32767 range on every node.
-# With Minikube: minikube service kafka-ui -n healthcare
-#                opens the browser or prints the URL automatically.
-# ─────────────────────────────────────────────────────────────────────────────
+#  NODEPORT EXPLAINED:
+#  ────────────────────
+#  Service types:
+#    ClusterIP  = internal only   (what postgres uses — no external access needed)
+#    NodePort   = opens a port on the Minikube VM, reachable from your laptop
+#    LoadBalancer = provisions a cloud load balancer (not available on Minikube)
+#
+#  NodePort 30080 means:
+#    localhost (your laptop) → port 30080 → Minikube node → port 8080 → Kafka UI pod
+#
+#  You can access it as:
+#    http://<minikube-ip>:30080
+#  or using the minikube service command which looks up the IP automatically.
+# ───────────────────────────────────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
   name: kafka-ui
   namespace: healthcare
 spec:
-  type: NodePort
+  type: NodePort            # Expose this service outside the cluster
   selector:
-    app: kafka-ui
+    app: kafka-ui           # Route to pods with this label
   ports:
-    - port: 8080        # Port the Service exposes inside the cluster
-      targetPort: 8080  # Port on the pod
-      nodePort: 30080   # Port on the Minikube node (access from host browser)
+    - port: 8080            # Port the Service exposes inside the cluster
+      targetPort: 8080      # Port on the pod that the Service forwards to
+      nodePort: 30080       # Port on the Minikube node your laptop connects to
+                            # Valid range: 30000–32767

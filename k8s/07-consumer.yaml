@@ -1,27 +1,52 @@
-# ── Consumer Service — Deployment + Service ───────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+#  FILE: 07-consumer.yaml
+#  KINDS: Deployment  →  Service (NodePort)
+# ═══════════════════════════════════════════════════════════════════════════════
 #
-# This is the Spring Boot service that:
-#   1. Listens on the Kafka topic healthcare.customers
-#   2. Buffers messages in an in-memory queue
-#   3. Every 10 seconds runs a Spring Batch job to drain the queue into Postgres
+#  WHAT THIS SERVICE DOES:
+#  ────────────────────────
+#  The Consumer Service is the output stage of the pipeline:
 #
-# Retry / DLT flow (all Kafka-level):
-#   Fail → retry-0 (2s) → retry-1 (4s) → retry-2 (8s) → DLT
+#    1. A Kafka listener (@KafkaListener) continuously polls "healthcare.customers"
+#    2. Each received message is added to an in-memory queue (ConcurrentLinkedQueue)
+#    3. A scheduled task runs every 10 seconds — if the queue is non-empty,
+#       it launches a Spring Batch job to drain the queue and write all rows to Postgres
 #
-# Image build (run BEFORE applying this file):
-#   eval $(minikube docker-env)
-#   docker build -t consumer-service:latest \
-#     -f consumer-service/Dockerfile .
+#  RETRY AND DLT FLOW:
+#  ────────────────────
+#  The listener is annotated with @RetryableTopic. If processing fails:
 #
-# Access: minikube service consumer-service -n healthcare
+#    Main topic  →  (fail)  →  retry-0 (wait 2s)
+#                →  (fail)  →  retry-1 (wait 4s)
+#                →  (fail)  →  retry-2 (wait 8s)
+#                →  (fail)  →  DLT (Dead Letter Topic — message stored for investigation)
 #
-# Apply:  kubectl apply -f k8s/07-consumer.yaml
-# Verify: kubectl get pods -n healthcare -l app=consumer-service
-#         kubectl logs -n healthcare deployment/consumer-service -f
-# ─────────────────────────────────────────────────────────────────────────────
+#  All retry topics are Kafka topics (not in-memory). This means:
+#    • Retries survive pod restarts
+#    • You can inspect stuck messages in the DLT via Kafka UI
+#    • The consumer is decoupled from retry timing — Kafka manages the delay
+#
+#  TECHNOLOGY STACK (inside this pod):
+#    • Spring Boot 3.2.4    — application framework
+#    • Spring Kafka          — @KafkaListener + @RetryableTopic
+#    • Spring Batch          — bulk insert into Postgres (chunked for efficiency)
+#    • Spring Scheduling     — @Scheduled triggers the batch job every 10s
+#    • Spring Actuator       — health endpoint used by the probes below
+#
+#  IMAGE BUILD REQUIREMENT:
+#  ─────────────────────────
+#  eval $(minikube docker-env)   ← point Docker CLI at Minikube (macOS/Linux)
+#  docker build -t consumer-service:latest -f consumer-service/Dockerfile .
+#
+#  APPLY:   kubectl apply -f k8s/07-consumer.yaml
+#  VERIFY:  kubectl get pods -n healthcare -l app=consumer-service
+#           kubectl logs -n healthcare deployment/consumer-service -f
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
-# ── 1. Deployment ─────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+#  RESOURCE 1: Deployment
+# ───────────────────────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,48 +55,72 @@ metadata:
   labels:
     app: consumer-service
 spec:
-  replicas: 1
+  replicas: 1                # One consumer instance — scale up if processing lag increases
   selector:
     matchLabels:
       app: consumer-service
   template:
     metadata:
       labels:
-        app: consumer-service
+        app: consumer-service   # Must match selector.matchLabels above
     spec:
       containers:
         - name: consumer-service
           image: consumer-service:latest
-          imagePullPolicy: Never   # Use locally built image from minikube docker-env
+
+          # imagePullPolicy: Never
+          # ──────────────────────
+          # Use the locally built image from Minikube's Docker daemon.
+          # The image must be built after running: eval $(minikube docker-env)
+          imagePullPolicy: Never
+
           ports:
-            - containerPort: 8082
+            - containerPort: 8082   # Consumer service runs on 8082 (separate from producer's 8081)
+
           env:
-            # Activate the dev Spring profile (debug logging).
-            # The env vars below override the profile's localhost defaults
-            # with real Kubernetes Service names resolved via K8s DNS.
+            # ── SPRING PROFILE ─────────────────────────────────────────────────
+            # "dev" activates application-dev.yml (DEBUG logging, localhost defaults).
+            # The explicit env vars below override those localhost defaults with
+            # real Kubernetes Service names.
             - name: SPRING_PROFILES_ACTIVE
               value: "dev"
+
+            # ── DATABASE CONNECTION ─────────────────────────────────────────────
+            # Consumer writes customer records to Postgres after receiving from Kafka.
+            # "postgres" resolves to the Postgres Service's ClusterIP.
             - name: SPRING_DATASOURCE_URL
               value: "jdbc:postgresql://postgres:5432/healthcare_db"
             - name: SPRING_DATASOURCE_USERNAME
               value: "postgres"
             - name: SPRING_DATASOURCE_PASSWORD
               value: "root"
+
+            # ── KAFKA CONNECTION ────────────────────────────────────────────────
+            # The consumer subscribes to topics on this broker.
+            # "kafka:29092" resolves to the kafka Service.
+            # The consumer group ID is defined in application-dev.yml:
+            #   group-id: healthcare-consumer-group
+            # (Each profile has its own group ID — test uses healthcare-consumer-group-test)
             - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
               value: "kafka:29092"
 
-          # ── Readiness Probe ───────────────────────────────────────────────
-          # Spring Boot checks DB + Kafka connectivity inside /actuator/health.
-          # The pod won't receive traffic (or be considered "ready" for
-          # Kafka consumption) until both are healthy.
+          # ── READINESS PROBE ───────────────────────────────────────────────────
+          # Spring Actuator checks DB connection AND Kafka broker connectivity.
+          # The pod won't be marked Ready (and won't consume Kafka messages)
+          # until both Postgres and Kafka are up and reachable.
+          #
+          # This is important: if Kafka isn't ready yet, we don't want the consumer
+          # trying to commit offsets on a non-existent group coordinator.
           readinessProbe:
             httpGet:
               path: /actuator/health
               port: 8082
-            initialDelaySeconds: 40
+            initialDelaySeconds: 40   # Spring Boot startup ~30-40s
             periodSeconds: 10
-            failureThreshold: 6
+            failureThreshold: 6       # 6 × 10s = 60s window before marking NotReady
 
+          # ── LIVENESS PROBE ────────────────────────────────────────────────────
+          # If the consumer gets stuck (Kafka listener deadlock, OOM), restart it.
           livenessProbe:
             httpGet:
               path: /actuator/health
@@ -89,11 +138,23 @@ spec:
 
 ---
 
-# ── 2. Service ────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+#  RESOURCE 2: Service  (NodePort)
+# ───────────────────────────────────────────────────────────────────────────────
 #
-# NodePort for accessing Actuator endpoints from the host.
-# Useful for: curl http://<minikube-ip>:30082/actuator/health
-# ─────────────────────────────────────────────────────────────────────────────
+#  WHY NODEPORT FOR THE CONSUMER?
+#  ───────────────────────────────
+#  The consumer doesn't expose a business API (it's pull-based via Kafka).
+#  We expose it via NodePort only for MONITORING purposes — so you can
+#  check its health and actuator endpoints from your laptop:
+#
+#    curl http://<minikube-ip>:30082/actuator/health
+#    curl http://<minikube-ip>:30082/actuator/metrics
+#
+#  OR via port-forward:
+#    kubectl port-forward svc/consumer-service 8082:8082 -n healthcare
+#    curl http://localhost:8082/actuator/health
+# ───────────────────────────────────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
@@ -102,8 +163,8 @@ metadata:
 spec:
   type: NodePort
   selector:
-    app: consumer-service
+    app: consumer-service     # Route to pods with this label
   ports:
-    - port: 8082
-      targetPort: 8082
-      nodePort: 30082
+    - port: 8082              # Service port
+      targetPort: 8082        # Pod port
+      nodePort: 30082         # External port on Minikube node

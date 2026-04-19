@@ -1,24 +1,42 @@
-# ── CSV Producer Service — Deployment + Service ───────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+#  FILE: 06-producer.yaml
+#  KINDS: Deployment  →  Service (NodePort)
+# ═══════════════════════════════════════════════════════════════════════════════
 #
-# This is the Spring Boot service that:
-#   1. Accepts a CSV file via POST /api/batch/upload
-#   2. Runs a Spring Batch job to read the CSV row by row
-#   3. Publishes each row as a JSON message to the Kafka topic
+#  WHAT THIS SERVICE DOES:
+#  ────────────────────────
+#  The CSV Producer Service is the entry point of the pipeline:
 #
-# Image build (run BEFORE applying this file):
-#   eval $(minikube docker-env)
-#   docker build -t csv-producer-service:latest \
-#     -f csv-producer-service/Dockerfile .
+#    1. You POST a CSV file to  POST /api/batch/upload
+#    2. Spring Batch reads the CSV row by row
+#    3. Each row is serialized to JSON and published to the Kafka topic
+#       "healthcare.customers"
 #
-# Access: minikube service csv-producer-service -n healthcare
+#  The service is stateless — it reads a file and sends to Kafka. No local data stored.
 #
-# Apply:  kubectl apply -f k8s/06-producer.yaml
-# Verify: kubectl get pods -n healthcare -l app=csv-producer-service
-#         kubectl logs -n healthcare deployment/csv-producer-service
-# ─────────────────────────────────────────────────────────────────────────────
+#  TECHNOLOGY STACK (inside this pod):
+#    • Spring Boot 3.2.4  — application framework
+#    • Spring Batch       — CSV reading (chunked, restartable, resumable)
+#    • Kafka Producer     — publishes messages to Kafka
+#    • Spring Actuator    — health endpoint used by the probes below
+#
+#  IMAGE BUILD REQUIREMENT:
+#  ─────────────────────────
+#  This pod uses a LOCALLY BUILT image (imagePullPolicy: Never).
+#  You must build the image inside Minikube's Docker daemon BEFORE applying:
+#
+#    eval $(minikube docker-env)   ← point Docker CLI at Minikube (macOS/Linux)
+#    docker build -t csv-producer-service:latest -f csv-producer-service/Dockerfile .
+#
+#  APPLY:   kubectl apply -f k8s/06-producer.yaml
+#  VERIFY:  kubectl get pods -n healthcare -l app=csv-producer-service
+#           kubectl logs -n healthcare deployment/csv-producer-service
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
-# ── 1. Deployment ─────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+#  RESOURCE 1: Deployment
+# ───────────────────────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,55 +45,79 @@ metadata:
   labels:
     app: csv-producer-service
 spec:
-  replicas: 1
+  replicas: 1                # One instance — CSV uploads are user-triggered, not high-traffic
   selector:
     matchLabels:
       app: csv-producer-service
   template:
     metadata:
       labels:
-        app: csv-producer-service
+        app: csv-producer-service   # Must match selector.matchLabels above
     spec:
       containers:
         - name: csv-producer-service
           image: csv-producer-service:latest
 
-          # imagePullPolicy: Never → Kubernetes uses the locally loaded image
-          # instead of trying to pull from Docker Hub.
-          # Required when using: eval $(minikube docker-env) && docker build ...
+          # imagePullPolicy: Never
+          # ──────────────────────
+          # Tells Kubernetes: do NOT try to pull this image from Docker Hub.
+          # Use only what is already in Minikube's local Docker daemon.
+          # Required when you build with: eval $(minikube docker-env) && docker build ...
+          # If you skip eval $(minikube docker-env), the image won't be found and
+          # the pod will fail with ImagePullBackOff.
           imagePullPolicy: Never
 
           ports:
-            - containerPort: 8081
+            - containerPort: 8081   # Spring Boot runs on port 8081 (set in application.yml)
+
           env:
-            # Activate the dev Spring profile (debug logging).
-            # The env vars below override the profile's localhost defaults
-            # with real Kubernetes Service names resolved via K8s DNS.
+            # ── SPRING PROFILE ─────────────────────────────────────────────────
+            # Activates application-dev.yml which enables DEBUG logging.
+            # The "dev" profile provides localhost defaults — but the explicit
+            # env vars below OVERRIDE those defaults with real K8s service names.
+            # Priority: OS env vars > application-dev.yml > application.yml
             - name: SPRING_PROFILES_ACTIVE
               value: "dev"
+
+            # ── DATABASE CONNECTION ─────────────────────────────────────────────
+            # "postgres" resolves via Kubernetes DNS to the postgres Service (port 5432).
+            # Spring Batch requires a database to store job execution metadata.
             - name: SPRING_DATASOURCE_URL
               value: "jdbc:postgresql://postgres:5432/healthcare_db"
             - name: SPRING_DATASOURCE_USERNAME
               value: "postgres"
             - name: SPRING_DATASOURCE_PASSWORD
               value: "root"
+
+            # ── KAFKA CONNECTION ────────────────────────────────────────────────
+            # "kafka:29092" resolves via Kubernetes DNS to the kafka Service.
+            # The producer sends CSV rows as JSON messages to this broker.
             - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
               value: "kafka:29092"
 
-          # ── Readiness Probe ───────────────────────────────────────────────
-          # Kubernetes will NOT send traffic until /actuator/health returns 200.
-          # This prevents the service from receiving requests before Postgres
-          # and Kafka connections are established.
+          # ── READINESS PROBE ───────────────────────────────────────────────────
+          # Spring Actuator's /actuator/health checks:
+          #   • Postgres connection (HikariCP pool)
+          #   • Disk space
+          #   • Liveness and Readiness states
+          #
+          # Until this returns HTTP 200, Kubernetes:
+          #   • Does NOT add this pod to the Service's endpoint list
+          #   • Does NOT route any incoming HTTP requests to this pod
+          #
+          # initialDelaySeconds: 40  — Spring Boot + Kafka + Postgres startup ~30-40s.
+          # Checking too early wastes probe budget. Checking too late delays readiness.
           readinessProbe:
             httpGet:
               path: /actuator/health
               port: 8081
-            initialDelaySeconds: 40   # Spring Boot takes ~30-40s to start
-            periodSeconds: 10
-            failureThreshold: 6
+            initialDelaySeconds: 40   # Start checking 40s after container starts
+            periodSeconds: 10         # Check every 10 seconds
+            failureThreshold: 6       # Allow 6 failures (60s window) before marking NotReady
 
-          # ── Liveness Probe ────────────────────────────────────────────────
-          # If the app gets stuck (deadlock, OOM, etc.), Kubernetes restarts it.
+          # ── LIVENESS PROBE ────────────────────────────────────────────────────
+          # If this fails, Kubernetes KILLS and RESTARTS the container.
+          # Higher initialDelay than readiness — give the app time to fully warm up.
           livenessProbe:
             httpGet:
               path: /actuator/health
@@ -93,14 +135,24 @@ spec:
 
 ---
 
-# ── 2. Service ────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+#  RESOURCE 2: Service  (NodePort)
+# ───────────────────────────────────────────────────────────────────────────────
 #
-# NodePort so we can call the REST API from the host machine.
-# Use: minikube service csv-producer-service -n healthcare --url
-#      → prints the URL (e.g. http://192.168.49.2:30081)
+#  We use NodePort so we can call the REST API from our laptop.
 #
-# Then upload: curl -X POST <url>/api/batch/upload -F "file=@sample-customers.csv"
-# ─────────────────────────────────────────────────────────────────────────────
+#  Get the URL:
+#    minikube service csv-producer-service -n healthcare --url
+#    → prints something like http://192.168.49.2:30081
+#
+#  Upload a CSV:
+#    curl -X POST http://192.168.49.2:30081/api/batch/upload \
+#      -F "file=@sample-customers.csv"
+#
+#  OR use port-forward (no Minikube IP needed):
+#    kubectl port-forward svc/csv-producer-service 8081:8081 -n healthcare
+#    curl -X POST http://localhost:8081/api/batch/upload -F "file=@sample-customers.csv"
+# ───────────────────────────────────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
@@ -109,8 +161,8 @@ metadata:
 spec:
   type: NodePort
   selector:
-    app: csv-producer-service
+    app: csv-producer-service   # Route to pods with this label
   ports:
-    - port: 8081
-      targetPort: 8081
-      nodePort: 30081
+    - port: 8081                # Service port (internal)
+      targetPort: 8081          # Pod port
+      nodePort: 30081           # External port on Minikube node
