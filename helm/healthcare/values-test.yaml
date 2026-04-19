@@ -1,0 +1,24 @@
+# ── Test environment overrides ────────────────────────────────────────────────
+# Usage:
+#   helm install healthcare ./helm/healthcare \
+#     -f helm/healthcare/values-test.yaml \
+#     --namespace healthcare-test --create-namespace
+# ─────────────────────────────────────────────────────────────────────────────
+
+namespace: healthcare-test
+
+profile: test   # activates application-test.yml (full debug logging, -test DB)
+
+postgres:
+  storage: 256Mi
+  database: healthcare_test_db   # separate DB so test data doesn't pollute dev
+
+# Separate NodePorts so test and dev can run simultaneously on the same cluster
+kafkaUi:
+  nodePort: 31080
+
+producer:
+  nodePort: 31081
+
+consumer:
+  nodePort: 31082

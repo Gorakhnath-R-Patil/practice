@@ -1,0 +1,45 @@
+# ── Kafka Topic Init Job ──────────────────────────────────────────────────────
+# Runs once, creates all topics from values.topics, then exits Completed.
+# Topic list is fully configurable in values.yaml.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Include release name so reinstalls don't collide with old completed Jobs
+  name: kafka-init-{{ .Release.Revision }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "healthcare.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: kafka-init
+          image: {{ .Values.kafka.image }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              echo "=== Waiting for Kafka ==="
+              until kafka-topics --bootstrap-server kafka:29092 --list > /dev/null 2>&1; do
+                echo "Kafka not ready, retrying in 5s..."; sleep 5
+              done
+              echo "=== Kafka ready — creating topics ==="
+              {{- range .Values.topics }}
+              kafka-topics --create --if-not-exists \
+                --bootstrap-server kafka:29092 \
+                --topic {{ .name }} \
+                --partitions {{ .partitions }} \
+                --replication-factor {{ .replicationFactor }} \
+                --config retention.ms={{ .retentionMs }}
+              {{- end }}
+              echo "=== Topics created ==="
+              kafka-topics --bootstrap-server kafka:29092 --list
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"

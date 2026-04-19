@@ -1,0 +1,30 @@
+# ── QA profile ────────────────────────────────────────────────────────────────
+# Activate: SPRING_PROFILES_ACTIVE=qa
+#
+# Used in the QA / staging environment.
+# NO defaults — all values MUST be supplied via environment variables.
+# The app will fail fast at startup if any required variable is missing,
+# which is the right behaviour in a QA environment.
+#
+# Required env vars (no defaults — must be set explicitly):
+#   SPRING_DATASOURCE_URL
+#   SPRING_DATASOURCE_USERNAME
+#   SPRING_DATASOURCE_PASSWORD
+#   SPRING_KAFKA_BOOTSTRAP_SERVERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS}
+
+# Reduced logging in QA — less noise, easier to spot real issues
+logging:
+  level:
+    com.demo: INFO
+    org.springframework.batch: INFO
+    org.springframework.kafka: WARN

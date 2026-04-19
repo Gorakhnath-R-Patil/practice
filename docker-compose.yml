@@ -125,6 +125,7 @@ services:
     ports:
       - "8081:8081"
     environment:
+      SPRING_PROFILES_ACTIVE: dev             # activates application-dev.yml (debug logging)
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/healthcare_db
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: root
@@ -149,6 +150,7 @@ services:
     ports:
       - "8082:8082"
     environment:
+      SPRING_PROFILES_ACTIVE: dev             # activates application-dev.yml (debug logging)
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/healthcare_db
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: root

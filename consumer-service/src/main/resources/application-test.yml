@@ -1,0 +1,32 @@
+# ── Test profile ──────────────────────────────────────────────────────────────
+# Activate: SPRING_PROFILES_ACTIVE=test
+#
+# Used in CI pipelines or dedicated test environments.
+# All values come from env vars with safe test defaults.
+# Uses a separate consumer group so test traffic never interferes
+# with dev or QA offsets.
+#
+# Env vars expected (with defaults if not set):
+#   SPRING_DATASOURCE_URL      → jdbc:postgresql://localhost:5432/healthcare_test_db
+#   SPRING_DATASOURCE_USERNAME → postgres
+#   SPRING_DATASOURCE_PASSWORD → root
+#   SPRING_KAFKA_BOOTSTRAP_SERVERS → localhost:29092
+# ─────────────────────────────────────────────────────────────────────────────
+
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/healthcare_test_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:root}
+
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    consumer:
+      group-id: healthcare-consumer-group-test   # isolated from dev/qa offsets
+
+# Full debug logging in test — helps diagnose failures in CI
+logging:
+  level:
+    com.demo: DEBUG
+    org.springframework.batch: DEBUG
+    org.springframework.kafka: DEBUG

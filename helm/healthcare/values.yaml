@@ -1,0 +1,107 @@
+# ── Default values (dev / Minikube) ──────────────────────────────────────────
+#
+# Override per environment:
+#   helm install healthcare ./helm/healthcare                          # dev (defaults)
+#   helm install healthcare ./helm/healthcare -f helm/healthcare/values-test.yaml
+#   helm install healthcare ./helm/healthcare -f helm/healthcare/values-qa.yaml
+#
+# Or override a single value:
+#   helm upgrade healthcare ./helm/healthcare --set kafka.resources.limits.memory=2Gi
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Kubernetes namespace to deploy into
+namespace: healthcare
+
+# Spring profile activated in producer and consumer pods
+# Controls logging levels and which application-{profile}.yml is loaded
+profile: dev
+
+# ── PostgreSQL ────────────────────────────────────────────────────────────────
+postgres:
+  image: postgres:16-alpine
+  storage: 512Mi          # PVC size
+  database: healthcare_db
+  username: postgres
+  password: root
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# ── Kafka (KRaft mode) ────────────────────────────────────────────────────────
+kafka:
+  image: confluentinc/cp-kafka:7.7.1
+  clusterId: MkU3OEVBNTcwNTJENDM2Qg   # fixed — must stay the same across restarts
+  nodeId: "1"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+# ── Kafka topics created by the init Job ─────────────────────────────────────
+# Matches the @RetryableTopic config in CustomerKafkaListener.java
+topics:
+  - name: healthcare.customers
+    partitions: 3
+    replicationFactor: 1
+    retentionMs: 86400000     # 24 hours
+  - name: healthcare.customers-retry-0
+    partitions: 3
+    replicationFactor: 1
+    retentionMs: 3600000      # 1 hour
+  - name: healthcare.customers-retry-1
+    partitions: 3
+    replicationFactor: 1
+    retentionMs: 3600000
+  - name: healthcare.customers-retry-2
+    partitions: 3
+    replicationFactor: 1
+    retentionMs: 3600000
+  - name: healthcare.customers.DLT
+    partitions: 3
+    replicationFactor: 1
+    retentionMs: 604800000    # 7 days
+
+# ── Kafka UI ──────────────────────────────────────────────────────────────────
+kafkaUi:
+  image: provectuslabs/kafka-ui:latest
+  nodePort: 30080
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "300m"
+
+# ── CSV Producer Service ──────────────────────────────────────────────────────
+producer:
+  image: csv-producer-service:latest
+  imagePullPolicy: Never      # use locally built image (minikube docker-env)
+  nodePort: 30081
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# ── Consumer Service ──────────────────────────────────────────────────────────
+consumer:
+  image: consumer-service:latest
+  imagePullPolicy: Never      # use locally built image (minikube docker-env)
+  nodePort: 30082
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"

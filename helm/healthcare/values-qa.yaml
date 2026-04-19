@@ -1,0 +1,61 @@
+# ── QA environment overrides ─────────────────────────────────────────────────
+# Usage:
+#   helm install healthcare ./helm/healthcare \
+#     -f helm/healthcare/values-qa.yaml \
+#     --namespace healthcare-qa --create-namespace \
+#     --set postgres.password=$POSTGRES_PASSWORD
+#
+# In QA, app images should be tagged versions (not :latest) pulled from a
+# registry. Set imagePullPolicy: IfNotPresent and use a real image tag.
+# ─────────────────────────────────────────────────────────────────────────────
+
+namespace: healthcare-qa
+
+profile: qa   # activates application-qa.yml (INFO logging, env vars required)
+
+postgres:
+  storage: 2Gi
+  password: "changeme"   # override with: --set postgres.password=<secret>
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+kafka:
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+producer:
+  image: csv-producer-service:1.0.0
+  imagePullPolicy: IfNotPresent   # pull from registry, cache locally
+  nodePort: 32081
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+consumer:
+  image: consumer-service:1.0.0
+  imagePullPolicy: IfNotPresent
+  nodePort: 32082
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+kafkaUi:
+  nodePort: 32080

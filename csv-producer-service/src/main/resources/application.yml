@@ -1,3 +1,18 @@
+# ── Base configuration — shared across ALL profiles ───────────────────────────
+#
+# This file contains only settings that NEVER change between environments:
+# server port, multipart limits, Kafka topic names, Actuator exposure.
+#
+# Environment-specific settings (datasource URL, Kafka URL, log levels) live
+# in the profile files below. Spring Boot merges them at startup:
+#   application.yml  ←  application-{profile}.yml  ←  env vars  (highest wins)
+#
+# Activate a profile:
+#   SPRING_PROFILES_ACTIVE=dev   mvn spring-boot:run   (local development)
+#   SPRING_PROFILES_ACTIVE=test  (CI / integration test environment)
+#   SPRING_PROFILES_ACTIVE=qa    (QA server — all values from env vars)
+# ─────────────────────────────────────────────────────────────────────────────
+
 server:
   port: 8081
 
@@ -5,37 +20,32 @@ spring:
   application:
     name: csv-producer-service
 
-  # PostgreSQL datasource for Spring Batch JobRepository metadata
-  # Env vars override when running inside Docker (set in docker-compose)
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/healthcare_db}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:root}
-    driver-class-name: org.postgresql.Driver
+    driver-class-name: org.postgresql.Driver   # fixed — always PostgreSQL
 
   batch:
     jdbc:
-      initialize-schema: always   # auto-create Spring Batch metadata tables in Postgres
+      initialize-schema: always   # auto-create Spring Batch metadata tables
     job:
       enabled: false              # do NOT auto-run on startup; trigger via REST
-
-  kafka:
-    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 
   servlet:
     multipart:
       max-file-size: 50MB
       max-request-size: 50MB
 
+# ── Kafka topic names ─────────────────────────────────────────────────────────
+# Topic names are application constants — they don't change per environment.
 kafka:
   topic:
     customers: healthcare.customers
 
+# ── Actuator — expose all useful endpoints ────────────────────────────────────
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,env,loggers,httptrace
+        include: health,info,metrics,env,loggers
       base-path: /actuator
   endpoint:
     health:

@@ -1,0 +1,72 @@
+# ── CSV Producer Service — Deployment + Service ───────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: csv-producer-service
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: csv-producer-service
+    {{- include "healthcare.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: csv-producer-service
+  template:
+    metadata:
+      labels:
+        app: csv-producer-service
+    spec:
+      containers:
+        - name: csv-producer-service
+          image: {{ .Values.producer.image }}
+          imagePullPolicy: {{ .Values.producer.imagePullPolicy }}
+          ports:
+            - containerPort: 8081
+          env:
+            # Spring profile controls logging levels and which application-{profile}.yml loads.
+            # Explicit env vars below override the profile's connection defaults.
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ .Values.profile | quote }}
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://postgres:5432/{{ .Values.postgres.database }}"
+            - name: SPRING_DATASOURCE_USERNAME
+              value: {{ .Values.postgres.username | quote }}
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: {{ .Values.postgres.password | quote }}
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:29092"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 40
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 60
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.producer.resources | nindent 12 }}
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: csv-producer-service
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "healthcare.labels" . | nindent 4 }}
+spec:
+  type: NodePort
+  selector:
+    app: csv-producer-service
+  ports:
+    - port: 8081
+      targetPort: 8081
+      nodePort: {{ .Values.producer.nodePort }}

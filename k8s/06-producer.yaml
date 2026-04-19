@@ -48,8 +48,11 @@ spec:
           ports:
             - containerPort: 8081
           env:
-            # Override application.yml defaults with Kubernetes service names.
-            # "postgres" and "kafka" resolve via Kubernetes DNS.
+            # Activate the dev Spring profile (debug logging).
+            # The env vars below override the profile's localhost defaults
+            # with real Kubernetes Service names resolved via K8s DNS.
+            - name: SPRING_PROFILES_ACTIVE
+              value: "dev"
             - name: SPRING_DATASOURCE_URL
               value: "jdbc:postgresql://postgres:5432/healthcare_db"
             - name: SPRING_DATASOURCE_USERNAME

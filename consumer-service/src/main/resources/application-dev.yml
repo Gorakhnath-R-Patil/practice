@@ -1,0 +1,27 @@
+# ── Development profile ───────────────────────────────────────────────────────
+# Activate: SPRING_PROFILES_ACTIVE=dev
+#
+# Used when running locally without Docker:
+#   SPRING_PROFILES_ACTIVE=dev mvn spring-boot:run
+#
+# Assumes Kafka and Postgres are running on localhost
+# (either installed natively or via: docker compose up kafka postgres)
+# ─────────────────────────────────────────────────────────────────────────────
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/healthcare_db
+    username: postgres
+    password: root
+
+  kafka:
+    bootstrap-servers: localhost:29092
+    consumer:
+      group-id: healthcare-consumer-group
+
+# Verbose logging — useful while developing and debugging locally
+logging:
+  level:
+    com.demo: DEBUG
+    org.springframework.batch: DEBUG
+    org.springframework.kafka: INFO
