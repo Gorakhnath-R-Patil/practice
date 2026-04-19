@@ -27,7 +27,7 @@ spec:
             - name: KAFKA_CLUSTERS_0_NAME
               value: "local"
             - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
-              value: "kafka:29092"
+              value: {{ .Values.kafka.bootstrapServers | quote }}
           resources:
             {{- toYaml .Values.kafkaUi.resources | nindent 12 }}
 

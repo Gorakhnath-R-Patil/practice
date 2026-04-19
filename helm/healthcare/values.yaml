@@ -31,11 +31,18 @@ postgres:
       memory: "512Mi"
       cpu: "500m"
 
-# ── Kafka (KRaft mode) ────────────────────────────────────────────────────────
+# ── Strimzi Kafka ─────────────────────────────────────────────────────────────
+# Managed by the Strimzi operator (installed separately — see README).
+# The operator creates:  healthcare-kafka-bootstrap:9092  (ClusterIP, clients)
+#                        healthcare-kafka-brokers          (headless, internal)
+#                        healthcare-kafka-0                (broker pod)
+#                        healthcare-entity-operator        (KafkaTopic reconciler)
+# ─────────────────────────────────────────────────────────────────────────────
 kafka:
-  image: confluentinc/cp-kafka:7.7.1
-  clusterId: MkU3OEVBNTcwNTJENDM2Qg   # fixed — must stay the same across restarts
-  nodeId: "1"
+  version: "4.1.0"           # Strimzi 0.51 supports: 4.1.0 / 4.1.1 / 4.2.0
+  metadataVersion: "4.1-IV0" # KRaft metadata version for Kafka 4.1
+  replicas: 1                # Minikube single-node: keep at 1
+  bootstrapServers: "healthcare-kafka-bootstrap:9092"
   resources:
     requests:
       memory: "512Mi"

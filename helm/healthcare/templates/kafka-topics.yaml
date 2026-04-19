@@ -1,0 +1,31 @@
+# ── Strimzi KafkaTopic Resources ─────────────────────────────────────────────
+# Replaces: kafka-init Job (shell-script topic creation)
+#
+# The Strimzi Entity Operator (deployed via entityOperator.topicOperator in
+# kafka.yaml) watches these CRs and reconciles them into real Kafka topics.
+# It handles create, update, and delete idempotently — no polling loop needed.
+#
+# REQUIRED: label strimzi.io/cluster must match the Kafka CR name (healthcare).
+#
+# Resource name uses replace "." "-" for DNS-safe K8s name.
+# spec.topicName preserves the original dot-notation topic name (what Spring sees).
+# ─────────────────────────────────────────────────────────────────────────────
+
+{{- range .Values.topics }}
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: {{ .name | replace "." "-" | lower }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    strimzi.io/cluster: healthcare
+    {{- include "healthcare.labels" $ | nindent 4 }}
+spec:
+  topicName: {{ .name }}
+  partitions: {{ .partitions }}
+  replicas: {{ .replicationFactor }}
+  config:
+    retention.ms: {{ .retentionMs | int64 | toString | quote }}
+    cleanup.policy: delete
+{{- end }}

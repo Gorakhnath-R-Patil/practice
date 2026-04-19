@@ -13,6 +13,11 @@ postgres:
   storage: 256Mi
   database: healthcare_test_db   # separate DB so test data doesn't pollute dev
 
+kafka:
+  version: "4.1.0"
+  metadataVersion: "4.1-IV0"
+  bootstrapServers: "healthcare-kafka-bootstrap:9092"
+
 # Separate NodePorts so test and dev can run simultaneously on the same cluster
 kafkaUi:
   nodePort: 31080

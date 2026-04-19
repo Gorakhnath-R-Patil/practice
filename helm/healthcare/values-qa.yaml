@@ -25,6 +25,10 @@ postgres:
       cpu: "1000m"
 
 kafka:
+  version: "4.1.0"
+  metadataVersion: "4.1-IV0"
+  replicas: 1
+  bootstrapServers: "healthcare-kafka-bootstrap:9092"
   resources:
     requests:
       memory: "1Gi"

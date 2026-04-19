@@ -34,7 +34,7 @@ spec:
             - name: SPRING_DATASOURCE_PASSWORD
               value: {{ .Values.postgres.password | quote }}
             - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
-              value: "kafka:29092"
+              value: {{ .Values.kafka.bootstrapServers | quote }}
           readinessProbe:
             httpGet:
               path: /actuator/health
